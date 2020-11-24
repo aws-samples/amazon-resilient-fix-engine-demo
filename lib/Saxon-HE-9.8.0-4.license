@@ -1,0 +1,56 @@
+Licensing
+This section of the documentation provides information about Saxon licensing, including required notices for open-source components that have been incorporated into Saxon, and acknowledgments of contributors.
+
+This documentation relates both to the open source Saxon-HE product and to the commercial products Saxon-PE and Saxon-EE. The conditions of use are of course different in the two cases; there are also differences in the third-party components that are included.
+
+The information in this section applies to both the Java and .NET versions of Saxon, unless otherwise specified.
+
+The source code of Saxon can be considered for licensing purposes as having four parts:
+
+Category A consists of open-source code which was written as part of Saxon either by the initial developer, or by another contributor. All such components are subject only to the MPL 2.0 license. Details of third-party Contributions is provided, for information.
+Category B code was originally produced as part of some other product and subsequently incorporated (with varying degrees of modification) into Saxon by way of source code integration. Many of these components have their own license conditions: these are in all cases licenses similar in form to either the Mozilla Public License, the Apache license, or the BSD license. All these licenses are "non-viral": they permit the code to be combined into a commercial product without requiring the commercial code to become open source. In some cases the license conditions require the origin of the code to be acknowledged, typically by including a notice in all distributions of the product. These notices are provided in the notices directory of the Saxon product as distributed, and the documentation provides a table listing all these Third-party code components.
+Category C code consists of components that are included unchanged in the Saxon distribution in binary form, for the convenience of users to avoid the need for a separate download. (In the Java product this includes the ASM library for bytecode generation, the XQJ interface definitions, and the JLine 2 library for interactive console input; in the .NET product it also includes the IKVMC and OpenJDK runtimes, the Apache Xerces parser, and the TagSoup HTML parser.) These are listed as Redistributed components.
+The code in this category is in most cases used in all Saxon editions (the only open source code in Saxon-PE or Saxon-EE that is not also used in Saxon-HE is the ASM bytecode generation library and the ICU localization library). In all cases the license under which the code was used permits the creation of commercial products derived from this code, and does not "infect" such products with open source obligations. In many cases the relevant license requires a notice to be published; this is satisfied by inclusion of the relevant notices in this documentation and also in the notices directory of the issued product. In many cases the relevant license also requires any modifications to source code to be published; Saxonica satisfies the requirement by issuing the source code of Saxon-HE, which includes all such modifications.
+
+Category D code is proprietary (non-open-source) code developed and owned by Saxonica. This is made available to a small number of selected integration partners under the terms of a custom contract. This code is not used in Saxon-HE.
+Saxon-HE
+The open-source Saxon-HE product is made available under the Mozilla Public License (the "License"). Prior to Saxon 9.5 MPL Version 1.0 was used; from 9.5 onwards, MPL Version 2.0 is used. You may not use the software except as permitted by the License. You may obtain a copy of the License at http://www.mozilla.org/MPL/.
+
+MPL version 2.0 allows software to be declared as "compatible with secondary licenses". Saxon code, in general, is NOT compatible with secondary licenses. This means it is not possible to redistribute the source code under a different license. The reason for this is the difficulty of obtaining the consent of all past contributors to the code.
+
+Saxon-HE is built from code in categories A, B, and C above. This code is published and is available for use under the terms of the license. Most users will never need access to source code, but for those who do, it is published in two forms:
+
+Saxonica's open-source Subversion repository at dev.saxonica.com contains the source code in the form required by the MPL license, that is, "the form of the work preferred for making modifications". This form of the code includes preprocessor directives used to identify variations between the code for different Saxon editions, and it therefore cannot be compiled until the preprocessor has been run. The repository includes Ant build files that invoke this preprocessing. The build files are complex and have many dependencies. Many users will therefore find it easier to build from the preprocessed source published on SourceForge.
+For every release, a ZIP file containing Saxon-HE source is published on the SourceForge site (project name Saxon). A typical file name is saxon-source-10.0.zip. The is the source code after preprocessing to extract the code needed for building Saxon-HE, and it is possible to compile it simply by dropping it into the source directory structure for an IDE such as Eclipse or IntelliJ, provided all the required third-party libraries are present on the classpath.
+Saxonica does not actively solicit contributions to the code from external developers. We will accept contributions only if the requirements and design have been agreed in advance, if comprehensive test material is supplied in a suitable form, and if a contribution agreement is signed.
+
+Saxon-HE includes a separate JAR file, saxon-xqj-10.0.jar, which contains Saxon's support for the XQJ interface, a standard API for access to XQuery engines from Java. In previous Saxon releases this was made available as part of the main JAR file. It has been decoupled because it has been pointed out that the license under which Oracle distributes XQJ is not a pure open source license under the definition used by the Open Source Initiative: specifically, it does not allow modifications, and it does not allow redistribution except as part of a product that satisfies all the compatibility tests. Saxon satisfies these conditions, but some users are only prepared to use code that conforms to OSI-approved licenses. If you fall into this category, please delete the saxon-xqj-10.0.jar file. (In Saxon-PE and Saxon-EE, the XQJ components are delivered as part of the main Saxon JAR file.)
+
+Although Saxonica complies with all the terms of the XQJ license, Saxonica does not necessarily accept that producing an implementation of a published API is an action that legally requires a license.
+
+Saxon-EE and Saxon-PE
+The Enterprise and Professional editions of Saxon are commercial products released under the terms and conditions published at http://www.saxonica.com/license/paid-license.pdf.
+
+These products include some open source components. In particular, they include the open-source components used to build Saxon-HE (categories A, B, and C above) in their entirety; they also include some open-source components (notably the ASM and ICU libraries) which are not used in Saxon-HE. Although your contract with Saxonica is entirely defined by the commercial license, the existence of an open source license for these components gives you additional rights, which are described above.
+
+The Saxon SQL extension
+The Saxon SQL extension is available as an open-source plug-in to Saxon-PE or Saxon-EE (on the Java platform only, not available on the .NET platform). It will not run with Saxon-HE because it relies on XSLT element extensibility, a feature not available in Saxon-HE. However, the code of the SQL extension itself is open-source and is issued under the Mozilla Public License, meaning that you are free to extend it and customize it to your needs, even though it requires Saxon-PE or Saxon-EE to run.
+
+EXSLT extensions
+A substantial number of extension functions defined in EXSLT are available as an open-source plug-in to Saxon-PE or Saxon-EE. Many of these are implemented as reflexive extension functions, and therefore rely on a mechanism not available in Saxon-HE. However, the code of the these extension functions itself is open-source and is issued under the Mozilla Public License 2.0, meaning that you are free to extend it and customize it to your needs, even though it requires Saxon-PE or Saxon-EE to run. (See EXSLT extensions for more information on the functions available.)
+
+Note: this does not apply to implementations of the EXPath extension functions, which since Saxon 9.6 are implemented in code that is Saxonica-proprietary. (See EXPath extensions for more information on the functions available.)
+
+Redistribution
+Redistribution of Saxon-HE is freely permitted under the terms of the Mozilla Public License 2.0. Note that this requires inclusion of all the necessary notices. If any source code changes are made, the license requires that they be published (or at any rate, made available to your users); but you are not required to publish the source of your own application code if it is in separate modules.
+
+If you produce a product that includes or requires Saxon-HE, please refer to it prominently as "The Saxon XSLT and XQuery Processor from Saxonica Limited", and include the URL of the home page, which is at http://www.saxonica.com/. As a courtesy, please take reasonable steps to ensure that your users know that they are running Saxon.
+
+Redistribution of Saxon-PE or Saxon-EE as a component of a commercial application is possible under commercial terms; prices are published in the Saxonica online store, and a specimen contract will be supplied on request.
+
+Technical Support (Saxon-HE)
+Software distributed under the License is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for the specific language governing rights and limitations under the License.
+
+There is no guarantee of technical support, though we are usually able to answer enquiries within a few days. Please use the bug trackers and support forums provided on the community site at saxonica.plan.io. There is also a mailing list available at http://lists.sourceforge.net/lists/listinfo/saxon-help. Please check the bug tracker at saxonica.plan.io for details of known errors; all bugs are listed there, whether they apply to the open-source or commercial versions of Saxon.
+
+Unless otherwise stated, any code snippets that are published on a public forum in the course of a request for technical support are considered to be implicitly licensed for use in Saxonica's test suite, or where relevant for inclusion in the product itself, for release under the Mozilla Public License.
