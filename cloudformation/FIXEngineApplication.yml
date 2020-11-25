@@ -85,48 +85,66 @@ Metadata:
         default: VPC
   Comments: FIX Engine POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.19
-  LastUpdated: November 22, 2020
-  Version: v1.19
+  Description: FIXEngineOnAWS - v1.20
+  LastUpdated: November 24, 2020
+  Version: v1.20
 Outputs:
   ApplicationID:
+    Condition: ''
     Value: !Ref 'ApplicationID'
   ConnectionType:
+    Condition: ''
     Value: !Ref 'ConnectionType'
   DebugLogging:
+    Condition: ''
     Value: !Ref 'DebugLogging'
   FIXServerDNSName:
+    Condition: ''
     Value: !If
       - FIXServerDNSNameSupplied
       - !Ref 'FIXServerDNSName'
       - None
   FIXServerPort:
+    Condition: ''
     Value: !Ref 'FIXServerPort'
   FailoverMSKEndpoint:
+    Condition: ''
     Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
   GlobalAcceleratorArn:
+    Condition: IsAcceptorStack
     Value: !GetAtt 'GlobalAccelerator.AcceleratorArn'
   GlobalAcceleratorDNSName:
+    Condition: IsAcceptorStack
     Value: !GetAtt 'GlobalAccelerator.DnsName'
   GlobalAcceleratorEndpointGroupArn:
+    Condition: IsAcceptorStack
     Value: !GetAtt 'GlobalAcceleratorEndpointGroup.EndpointGroupArn'
   GlobalAcceleratorIPAddresses:
+    Condition: IsAcceptorStack
     Value: !GetAtt 'GlobalAcceleratorInfoRetriever.IPAddresses'
   KafkaConnTLS:
+    Condition: ''
     Value: !Ref 'KafkaConnTLS'
   NonTLSKafkaPort:
+    Condition: ''
     Value: '9092'
   PrimaryMSKEndpoint:
+    Condition: ''
     Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
   RDSClusterNonAdminSecretArn:
+    Condition: ''
     Value: !Ref 'RDSClusterNonAdminSecret'
   RDSClusterSecretArn:
+    Condition: ''
     Value: !Ref 'RDSClusterAdminSecret'
   SenderCompID:
+    Condition: ''
     Value: !Ref 'SenderCompID'
   TLSKafkaPort:
+    Condition: ''
     Value: '9094'
   TargetCompID:
+    Condition: ''
     Value: !Ref 'TargetCompID'
 Parameters:
   ApplicationID:
@@ -149,8 +167,8 @@ Parameters:
     Type: String
   FIXClientCIDRs:
     Default: '0.0.0.0/0'
-    Description: The external CIDR ranges that should be granted access to your ingestion
-      endpoint. (Max. 5)
+    Description: The comma-delimited external CIDR ranges that should be granted access
+      to your ingestion endpoint. (Max. 5)
     Type: CommaDelimitedList
   FIXServerDNSName:
     Description: If you are the acceptor, this will be the domain name created that
@@ -209,14 +227,15 @@ Parameters:
     Type: String
   UserApplicationCIDRs:
     Default: '0.0.0.0/0'
-    Description: The private CIDR ranges corresponding to the user application that
-      should be granted access to your MSK endpoint. (Max. 5)
+    Description: The comma-delimited private CIDR ranges corresponding to the user
+      application that should be granted access to your MSK endpoint. (Max. 5)
     Type: CommaDelimitedList
   VPC:
     Description: The VPC into which these resources should be launched.
     Type: AWS::EC2::VPC::Id
 Resources:
   ApplicationIDParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -233,6 +252,7 @@ Resources:
       Value: !Ref 'ApplicationID'
     Type: AWS::SSM::Parameter
   AutomationDocumentStarterFunction:
+    Condition: ''
     DependsOn:
       - AutomationDocumentStarterRole
     Properties:
@@ -265,6 +285,7 @@ Resources:
       Timeout: 15
     Type: AWS::Lambda::Function
   AutomationDocumentStarterLogGroup:
+    Condition: ''
     DependsOn:
       - AutomationDocumentStarterFunction
     Properties:
@@ -272,6 +293,7 @@ Resources:
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   AutomationDocumentStarterRole:
+    Condition: ''
     DependsOn:
       - MSKInitializationDocument
       - RDSInitializationDocument
@@ -327,6 +349,7 @@ Resources:
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   ConnectionTypeParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -343,6 +366,7 @@ Resources:
       Value: !Ref 'ConnectionType'
     Type: AWS::SSM::Parameter
   DebugLoggingParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -387,6 +411,7 @@ Resources:
           - FIXClientCIDRs
     Type: AWS::EC2::PrefixList
   FIXServerDNSNameParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -406,6 +431,7 @@ Resources:
         - None
     Type: AWS::SSM::Parameter
   FIXServerPortParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -421,15 +447,14 @@ Resources:
       Type: String
       Value: !Ref 'FIXServerPort'
     Type: AWS::SSM::Parameter
-  FailoverECSCluster:
-    Type: AWS::ECS::Cluster
-  FailoverECSService:
+  FailoverAcceptorECSService:
+    Condition: IsAcceptorStack
     DependsOn:
-      - FailoverECSTaskDefinition
       - FailoverECSCluster
+      - FargateSecurityGroup
+      - FailoverAcceptorECSTaskDefinition
       - FailoverTargetGroup
       - FailoverNLBListener
-      - FargateSecurityGroup
     Properties:
       Cluster: !Ref 'FailoverECSCluster'
       DesiredCount: 1
@@ -444,24 +469,89 @@ Resources:
             - !Ref 'FargateSecurityGroup'
           Subnets:
             - !Ref 'FailoverPrivateSubnet'
-      TaskDefinition: !Ref 'FailoverECSTaskDefinition'
+      TaskDefinition: !Ref 'FailoverAcceptorECSTaskDefinition'
     Type: AWS::ECS::Service
-  FailoverECSTaskDefinition:
+  FailoverAcceptorECSTaskDefinition:
+    Condition: IsAcceptorStack
     DependsOn:
-      - FailoverNLB
       - FargateLogGroup
       - FargateTaskRole
+      - FargateExecutionRole
+      - MSKClusterInfoRetriever
+      - RDSClusterNonAdminSecret
       - GlobalAccelerator
+    Properties:
+      ContainerDefinitions:
+        - Environment:
+            - Name: PRIMARY_MSK_ENDPOINT
+              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
+            - Name: FAILOVER_MSK_ENDPOINT
+              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
+            - Name: APPLICATION_STACK_NAME
+              Value: !Ref 'AWS::StackName'
+            - Name: GLOBAL_ACCELERATOR_ARN
+              Value: !If
+                - IsAcceptorStack
+                - !GetAtt 'GlobalAccelerator.AcceleratorArn'
+                - ''
+            - Name: GLOBAL_ACCELERATOR_ENDPOINT_ARN
+              Value: !If
+                - IsAcceptorStack
+                - !Ref 'FailoverNLB'
+                - ''
+          Essential: 'true'
+          Image: !Ref 'FargateImagePath'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref 'FargateLogGroup'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Join
+                - /
+                - - !Ref 'AWS::StackName'
+                  - Failover
+          Name: !Ref 'AWS::StackName'
+          PortMappings:
+            - ContainerPort: !Ref 'FIXServerPort'
+      Cpu: '512'
+      ExecutionRoleArn: !GetAtt 'FargateExecutionRole.Arn'
+      Memory: 1GB
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
+    Type: AWS::ECS::TaskDefinition
+  FailoverECSCluster:
+    Type: AWS::ECS::Cluster
+  FailoverInitiatorECSService:
+    Condition: IsInitiatorStack
+    DependsOn:
+      - FailoverECSCluster
+      - FargateSecurityGroup
+      - FailoverInitiatorECSTaskDefinition
+    Properties:
+      Cluster: !Ref 'FailoverECSCluster'
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref 'FargateSecurityGroup'
+          Subnets:
+            - !Ref 'FailoverPrivateSubnet'
+      TaskDefinition: !Ref 'FailoverInitiatorECSTaskDefinition'
+    Type: AWS::ECS::Service
+  FailoverInitiatorECSTaskDefinition:
+    Condition: IsInitiatorStack
+    DependsOn:
+      - FargateLogGroup
+      - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: GLOBAL_ACCELERATOR_ARN
-              Value: !GetAtt 'GlobalAccelerator.AcceleratorArn'
-            - Name: GLOBAL_ACCELERATOR_ENDPOINT_ARN
-              Value: !Ref 'FailoverNLB'
             - Name: PRIMARY_MSK_ENDPOINT
               Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
             - Name: FAILOVER_MSK_ENDPOINT
@@ -491,6 +581,7 @@ Resources:
       TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
     Type: AWS::ECS::TaskDefinition
   FailoverMSKEndpointParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -507,6 +598,8 @@ Resources:
       Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
     Type: AWS::SSM::Parameter
   FailoverNLB:
+    Condition: IsAcceptorStack
+    DependsOn: []
     Properties:
       IpAddressType: ipv4
       Scheme: internet-facing
@@ -515,6 +608,7 @@ Resources:
       Type: network
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
   FailoverNLBListener:
+    Condition: IsAcceptorStack
     DependsOn:
       - FailoverNLB
       - FailoverTargetGroup
@@ -543,6 +637,8 @@ Resources:
       PubliclyAccessible: 'false'
     Type: AWS::RDS::DBInstance
   FailoverTargetGroup:
+    Condition: IsAcceptorStack
+    DependsOn: []
     Properties:
       HealthCheckProtocol: TCP
       Port: !Ref 'FIXServerPort'
@@ -603,7 +699,6 @@ Resources:
   FargateTaskRole:
     DependsOn:
       - RDSClusterNonAdminSecret
-      - GlobalAcceleratorEndpointGroup
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -657,20 +752,34 @@ Resources:
                       - :parameter/fixengine/
                       - !Ref 'AWS::StackName'
                       - /*
-              - Action:
-                  - globalaccelerator:UpdateEndpointGroup
-                  - globalaccelerator:DescribeEndpointGroup
-                Effect: Allow
-                Resource:
-                  - !GetAtt 'GlobalAcceleratorEndpointGroup.EndpointGroupArn'
           PolicyName: primary-policy
     Type: AWS::IAM::Role
+  FargateTaskRoleGAPolicy:
+    Condition: IsAcceptorStack
+    DependsOn:
+      - FargateTaskRole
+      - GlobalAcceleratorEndpointGroup
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - globalaccelerator:UpdateEndpointGroup
+              - globalaccelerator:DescribeEndpointGroup
+            Effect: Allow
+            Resource:
+              - !GetAtt 'GlobalAcceleratorEndpointGroup.EndpointGroupArn'
+      PolicyName: global-accelerator-access
+      Roles:
+        - !Ref 'FargateTaskRole'
+    Type: AWS::IAM::Policy
   GlobalAccelerator:
+    Condition: IsAcceptorStack
     Properties:
       Enabled: 'true'
       Name: !Ref 'AWS::StackName'
     Type: AWS::GlobalAccelerator::Accelerator
   GlobalAcceleratorArnParam:
+    Condition: IsAcceptorStack
     Properties:
       Description: !Join
         - ''
@@ -687,6 +796,7 @@ Resources:
       Value: !GetAtt 'GlobalAccelerator.AcceleratorArn'
     Type: AWS::SSM::Parameter
   GlobalAcceleratorDNSNameParam:
+    Condition: IsAcceptorStack
     Properties:
       Description: !Join
         - ''
@@ -716,6 +826,7 @@ Resources:
           Type: A
     Type: AWS::Route53::RecordSetGroup
   GlobalAcceleratorEndpointGroup:
+    Condition: IsAcceptorStack
     DependsOn:
       - PrimaryNLB
       - FailoverNLB
@@ -730,6 +841,7 @@ Resources:
       ListenerArn: !Ref 'GlobalAcceleratorListener'
     Type: AWS::GlobalAccelerator::EndpointGroup
   GlobalAcceleratorEndpointGroupArnParam:
+    Condition: IsAcceptorStack
     Properties:
       Description: !Join
         - ''
@@ -746,6 +858,7 @@ Resources:
       Value: !GetAtt 'GlobalAcceleratorEndpointGroup.EndpointGroupArn'
     Type: AWS::SSM::Parameter
   GlobalAcceleratorIPAddressesParam:
+    Condition: IsAcceptorStack
     Properties:
       Description: !Join
         - ''
@@ -762,6 +875,7 @@ Resources:
       Value: !GetAtt 'GlobalAcceleratorInfoRetriever.IPAddresses'
     Type: AWS::SSM::Parameter
   GlobalAcceleratorInfoRetriever:
+    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
       - GlobalAcceleratorInfoRetrieverFunction
@@ -774,6 +888,7 @@ Resources:
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
   GlobalAcceleratorInfoRetrieverFunction:
+    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAcceleratorInfoRetrieverRole
     Properties:
@@ -809,6 +924,7 @@ Resources:
       Timeout: 15
     Type: AWS::Lambda::Function
   GlobalAcceleratorInfoRetrieverLogGroup:
+    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAcceleratorInfoRetrieverFunction
     Properties:
@@ -816,6 +932,7 @@ Resources:
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   GlobalAcceleratorInfoRetrieverRole:
+    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
     Properties:
@@ -840,6 +957,7 @@ Resources:
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   GlobalAcceleratorListener:
+    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
     Properties:
@@ -851,6 +969,7 @@ Resources:
       Protocol: TCP
     Type: AWS::GlobalAccelerator::Listener
   KafkaConnTLSParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -902,6 +1021,7 @@ Resources:
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
   MSKClusterInfoRetrieverFunction:
+    Condition: ''
     DependsOn:
       - MSKClusterInfoRetrieverRole
     Properties:
@@ -945,6 +1065,7 @@ Resources:
       Timeout: 15
     Type: AWS::Lambda::Function
   MSKClusterInfoRetrieverLogGroup:
+    Condition: ''
     DependsOn:
       - MSKClusterInfoRetrieverFunction
     Properties:
@@ -952,6 +1073,7 @@ Resources:
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   MSKClusterInfoRetrieverRole:
+    Condition: ''
     DependsOn:
       - MSKCluster
     Properties:
@@ -1080,6 +1202,7 @@ Resources:
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
   MSKClusterPrepSecurityGroup:
+    DependsOn: []
     Properties:
       GroupDescription: Security Group for MSK Cluster Prep
       VpcId: !Ref 'VPC'
@@ -1123,6 +1246,7 @@ Resources:
       - MSKCluster
       - MSKClusterPrepExecutionRole
       - MSKClusterPrepSecurityGroup
+      - MSKClusterPrepInstanceRoleProfile
     Properties:
       Content:
         assumeRole: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
@@ -1238,6 +1362,7 @@ Resources:
       DocumentType: Automation
     Type: AWS::SSM::Document
   NonTLSKafkaPortParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -1253,15 +1378,14 @@ Resources:
       Type: String
       Value: '9092'
     Type: AWS::SSM::Parameter
-  PrimaryECSCluster:
-    Type: AWS::ECS::Cluster
-  PrimaryECSService:
+  PrimaryAcceptorECSService:
+    Condition: IsAcceptorStack
     DependsOn:
-      - PrimaryECSTaskDefinition
       - PrimaryECSCluster
+      - FargateSecurityGroup
+      - PrimaryAcceptorECSTaskDefinition
       - PrimaryTargetGroup
       - PrimaryNLBListener
-      - FargateSecurityGroup
     Properties:
       Cluster: !Ref 'PrimaryECSCluster'
       DesiredCount: 1
@@ -1276,24 +1400,89 @@ Resources:
             - !Ref 'FargateSecurityGroup'
           Subnets:
             - !Ref 'PrimaryPrivateSubnet'
-      TaskDefinition: !Ref 'PrimaryECSTaskDefinition'
+      TaskDefinition: !Ref 'PrimaryAcceptorECSTaskDefinition'
     Type: AWS::ECS::Service
-  PrimaryECSTaskDefinition:
+  PrimaryAcceptorECSTaskDefinition:
+    Condition: IsAcceptorStack
     DependsOn:
-      - PrimaryNLB
       - FargateLogGroup
       - FargateTaskRole
+      - FargateExecutionRole
+      - MSKClusterInfoRetriever
+      - RDSClusterNonAdminSecret
       - GlobalAccelerator
+    Properties:
+      ContainerDefinitions:
+        - Environment:
+            - Name: PRIMARY_MSK_ENDPOINT
+              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
+            - Name: FAILOVER_MSK_ENDPOINT
+              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
+            - Name: APPLICATION_STACK_NAME
+              Value: !Ref 'AWS::StackName'
+            - Name: GLOBAL_ACCELERATOR_ARN
+              Value: !If
+                - IsAcceptorStack
+                - !GetAtt 'GlobalAccelerator.AcceleratorArn'
+                - ''
+            - Name: GLOBAL_ACCELERATOR_ENDPOINT_ARN
+              Value: !If
+                - IsAcceptorStack
+                - !Ref 'PrimaryNLB'
+                - ''
+          Essential: 'true'
+          Image: !Ref 'FargateImagePath'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref 'FargateLogGroup'
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Join
+                - /
+                - - !Ref 'AWS::StackName'
+                  - Primary
+          Name: !Ref 'AWS::StackName'
+          PortMappings:
+            - ContainerPort: !Ref 'FIXServerPort'
+      Cpu: '512'
+      ExecutionRoleArn: !GetAtt 'FargateExecutionRole.Arn'
+      Memory: 1GB
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
+    Type: AWS::ECS::TaskDefinition
+  PrimaryECSCluster:
+    Type: AWS::ECS::Cluster
+  PrimaryInitiatorECSService:
+    Condition: IsInitiatorStack
+    DependsOn:
+      - PrimaryECSCluster
+      - FargateSecurityGroup
+      - PrimaryInitiatorECSTaskDefinition
+    Properties:
+      Cluster: !Ref 'PrimaryECSCluster'
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref 'FargateSecurityGroup'
+          Subnets:
+            - !Ref 'PrimaryPrivateSubnet'
+      TaskDefinition: !Ref 'PrimaryInitiatorECSTaskDefinition'
+    Type: AWS::ECS::Service
+  PrimaryInitiatorECSTaskDefinition:
+    Condition: IsInitiatorStack
+    DependsOn:
+      - FargateLogGroup
+      - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: GLOBAL_ACCELERATOR_ARN
-              Value: !GetAtt 'GlobalAccelerator.AcceleratorArn'
-            - Name: GLOBAL_ACCELERATOR_ENDPOINT_ARN
-              Value: !Ref 'PrimaryNLB'
             - Name: PRIMARY_MSK_ENDPOINT
               Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
             - Name: FAILOVER_MSK_ENDPOINT
@@ -1323,6 +1512,7 @@ Resources:
       TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
     Type: AWS::ECS::TaskDefinition
   PrimaryMSKEndpointParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -1339,6 +1529,8 @@ Resources:
       Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
     Type: AWS::SSM::Parameter
   PrimaryNLB:
+    Condition: IsAcceptorStack
+    DependsOn: []
     Properties:
       IpAddressType: ipv4
       Scheme: internet-facing
@@ -1347,6 +1539,7 @@ Resources:
       Type: network
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
   PrimaryNLBListener:
+    Condition: IsAcceptorStack
     DependsOn:
       - PrimaryNLB
       - PrimaryTargetGroup
@@ -1375,6 +1568,8 @@ Resources:
       PubliclyAccessible: 'false'
     Type: AWS::RDS::DBInstance
   PrimaryTargetGroup:
+    Condition: IsAcceptorStack
+    DependsOn: []
     Properties:
       HealthCheckProtocol: TCP
       Port: !Ref 'FIXServerPort'
@@ -1429,7 +1624,7 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' RDS cluster'
       GenerateSecretString:
-        ExcludeCharacters: '"@/\,'
+        ExcludeCharacters: '"@/\,'''
         ExcludeLowercase: 'false'
         ExcludeNumbers: 'false'
         ExcludePunctuation: 'false'
@@ -1478,7 +1673,7 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' RDS cluster'
       GenerateSecretString:
-        ExcludeCharacters: '"@/\,'
+        ExcludeCharacters: '"@/\,'''
         ExcludeLowercase: 'false'
         ExcludeNumbers: 'false'
         ExcludePunctuation: 'false'
@@ -1490,6 +1685,7 @@ Resources:
         SecretStringTemplate: '{"username": "fixengine"}'
     Type: AWS::SecretsManager::Secret
   RDSClusterNonAdminSecretArnParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -1612,6 +1808,7 @@ Resources:
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
   RDSClusterSecretArnParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -1651,6 +1848,7 @@ Resources:
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
   RDSClusterSubnetGroup:
+    DependsOn: []
     Properties:
       DBSubnetGroupDescription: !Join
         - ''
@@ -1969,6 +2167,7 @@ Resources:
       PrefixListName: AWS:Route53HealthChecks
     Type: AWS::EC2::PrefixList
   SenderCompIDParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -1985,6 +2184,7 @@ Resources:
       Value: !Ref 'SenderCompID'
     Type: AWS::SSM::Parameter
   TLSKafkaPortParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -2001,6 +2201,7 @@ Resources:
       Value: '9094'
     Type: AWS::SSM::Parameter
   TargetCompIDParam:
+    Condition: ''
     Properties:
       Description: !Join
         - ''
@@ -2045,6 +2246,7 @@ Resources:
           - UserAppCIDRs
     Type: AWS::EC2::PrefixList
   VPCPrefixListManagerFunction:
+    Condition: ''
     DependsOn:
       - VPCPrefixListManagerRole
     Properties:
@@ -2113,6 +2315,7 @@ Resources:
       Timeout: 15
     Type: AWS::Lambda::Function
   VPCPrefixListManagerLogGroup:
+    Condition: ''
     DependsOn:
       - VPCPrefixListManagerFunction
     Properties:
@@ -2120,6 +2323,7 @@ Resources:
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   VPCPrefixListManagerRole:
+    Condition: ''
     DependsOn: []
     Properties:
       AssumeRolePolicyDocument:
