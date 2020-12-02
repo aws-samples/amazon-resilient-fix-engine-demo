@@ -444,8 +444,8 @@ public class FixEngine implements Application {
         } //while loop
     }
 
-	private static void updateGAEndpoints(String myGaEndpointArn) {
-        LOGGER.info(MY_IP+"UPDATE GA ENDPOINT starting for myGaEndpointArn: "+ myGaEndpointArn);
+	private static void updateGAEndpoints(String myGaEndpointGroupArn, String myGaEndpointArn) {
+        LOGGER.info(MY_IP+"UPDATE GA ENDPOINT starting for myGaEndpointGroupArn: "+ myGaEndpointGroupArn + " and myGaEndpointArn: "+ myGaEndpointArn);
         String activeEndpoint = null;
         String passiveEndpoint = null;
         String tobeActiveEndpoint = null;
@@ -459,7 +459,7 @@ public class FixEngine implements Application {
 
         AWSGlobalAccelerator amazonGlobalAcceleratorClient = AWSGlobalAcceleratorClientBuilder.standard().withRegion(Regions.US_WEST_2).build();
 
-        DescribeEndpointGroupResult describeEndpointGroupResult = amazonGlobalAcceleratorClient.describeEndpointGroup(new DescribeEndpointGroupRequest().withEndpointGroupArn(myGaEndpointArn));
+        DescribeEndpointGroupResult describeEndpointGroupResult = amazonGlobalAcceleratorClient.describeEndpointGroup(new DescribeEndpointGroupRequest().withEndpointGroupArn(myGaEndpointGroupArn));
         //System.out.println("describeEndpointGroupResult: " + describeEndpointGroupResult);
         EndpointGroup endpointGroup = describeEndpointGroupResult.getEndpointGroup();
         List<EndpointDescription> endpointDescriptions = endpointGroup.getEndpointDescriptions();
@@ -634,7 +634,8 @@ public class FixEngine implements Application {
     	String consumerGroupId = sessionSettings.getString("KafkaConsumerGroupID");
     	String kafkaOutboundTopicName = sessionSettings.getString("KafkaOutboundTopicName");
     	KAFKA_INBOUND_TOPIC_NAME = sessionSettings.getString("KafkaInboundTopicName");
-    	String myGAEndpointArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointArn");    	
+    	String myGAEndpointGroupArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointGroupArn");
+    	String myGAEndpointArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointArn");
     	boolean useJdbcConnection = "true".equals(sessionSettings.getString("UseJdbcHeartbeat"));
         
         addSqlDbConnectionCoordinatesToSettings(sessionSettings.getString("RDSClusterSecretArn"), sessionSettings);
@@ -659,7 +660,7 @@ public class FixEngine implements Application {
     	            if("10.130.0.66".equals(MY_IP)) {
     	            	LOGGER.severe(MY_IP+"**************** HEARTBEAT: NOT UPDATING GLOBAL ACCELERATOR ENDPOINT BECAUSE WE DONT HAVE ACCESS FROM THIS MACHINE!!!***********");
     	            } else {
-    	            	updateGAEndpoints(myGAEndpointArn);
+    	            	updateGAEndpoints(myGAEndpointGroupArn, myGAEndpointArn);
     	            }
     	        }
     	        IM_AM_THE_ACTIVE_ENGINE = true;
