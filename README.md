@@ -8,6 +8,7 @@
 - Along with the FIX engine, the  protocol allows vastly different institutions, technologies and architectures to communicate financial data to each other with minimal coupling and coordination effort.
 - To achieve this, the FIX engine must be highly available and resilient against brief outages as well as data center failures, and allow participants to continue exchanging FIX messages.
 - As FIX evolves and is more widely adopted, it holds the promise of allowing real-time processing of all post-trade events such as reconciliations, money movements, settlements, risk calculations and corporate actions.
+- Upgrading the protocol and integrating new clients also requires extensive and labor-intensive testing of the proposed FIX infrastructure without disturbing existing Production connectivity.
 - This requires an engine architecture that's trivial to set up, tear down, scale horizontally and test in parallel.
 - The aim of this project is to provide such a solution.
 
