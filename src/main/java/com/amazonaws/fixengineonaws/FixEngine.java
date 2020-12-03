@@ -1,6 +1,12 @@
 package com.amazonaws.fixengineonaws;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.sql.CallableStatement;
@@ -83,7 +89,6 @@ import quickfix.UnsupportedMessageType;
 public class FixEngine implements Application {
     private static Logger LOGGER = Logger.getLogger(FixEngine.class.getName());
     private static String MY_IP = getMyIp();
-    private static volatile SessionID FIX_OUTBOUND_SESSION_ID = null;
     private static boolean IM_AM_THE_ACTIVE_ENGINE = false;
     private static KafkaProducer<String, String> KAFKA_PRODUCER = null;
     private static KafkaConsumer<String, Object> KAFKA_CONSUMER = null;
@@ -91,8 +96,8 @@ public class FixEngine implements Application {
     private static long messageCounter = 0;
     private static Acceptor FIX_SERVER = null;
     private static Initiator FIX_CLIENT = null;
-    private static Session FIX_OUTBOUND_SESSION = null;
-    private static Session FIX_INBOUND_SESSION = null;
+    private static Session FIX_SESSION = null;
+    private static SessionID FIX_SESSION_ID = null;
     private static AWSSimpleSystemsManagement SSM_CLIENT = null;
 
     private static final int LEADER_STATUS_STILL_LEADER = 1;
@@ -107,13 +112,13 @@ public class FixEngine implements Application {
     @Override
     public void onLogon(SessionID sessionID) {
         LOGGER.info(MY_IP+"OnLogon session ID: " + sessionID);
-        FIX_OUTBOUND_SESSION_ID = sessionID;
+        FIX_SESSION_ID = sessionID;
     }
 
     @Override
     public void onLogout(SessionID sessionID) {
         LOGGER.info(MY_IP+"OnLogout session ID: " + sessionID);
-        FIX_OUTBOUND_SESSION_ID = null;
+        FIX_SESSION_ID = null;
     }
 
     @Override
@@ -205,13 +210,12 @@ public class FixEngine implements Application {
     			return "arn:aws:elasticloadbalancing:us-east-1:015331511911:loadbalancer/net/FixEn-Prima-JV82REH1OXV5/44c96ca1cc0dceec";
     		}
     		HashMap<String, String> ret = new HashMap<String, String>();
-    		ret.put("TLSKafkaPort","9094");
     		ret.put("SenderCompID","client");
     		ret.put("ConnectionType","initiator");
     		ret.put("PrimaryMSKEndpoint","b-1.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
     		ret.put("KafkaConnTLS","false");
     		ret.put("TargetCompID","server");
-    		ret.put("NonTLSKafkaPort","9092");
+    		ret.put("KafkaPort","9092");
     		ret.put("DebugLogging","true");
     		ret.put("FIXServerPort","9877");
     		ret.put("FailoverMSKEndpoint","b-2.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
@@ -254,6 +258,7 @@ public class FixEngine implements Application {
 
     private static void addSqlDbConnectionCoordinatesToSettings(String secretArn, SessionSettings sessionSettings) {        
         LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using ARN: " + secretArn);
+//      AWSSecretsManager client  = System.getProperty("os.name").contains("Windows") ? AWSSecretsManagerClientBuilder.standard().withRegion(Regions.US_EAST_1).build() : AWSSecretsManagerClientBuilder.standard().build();
         AWSSecretsManager client  = AWSSecretsManagerClientBuilder.standard().build();
         GetSecretValueRequest getSecretValueRequest = new GetSecretValueRequest().withSecretId(secretArn);
         GetSecretValueResult getSecretValueResult = null;
@@ -299,7 +304,7 @@ public class FixEngine implements Application {
         return null;    
     }
 
-    private static void overrideConfigFromSsmParameters(SessionSettings sessionSettings) throws ConfigError {
+    private static SessionSettings overrideConfigFromSsmParameters(SessionSettings sessionSettings) throws ConfigError, IOException {
     	LOGGER.info(MY_IP+"****OVERRIDE CONFIG FROM SSM PARAMETERS starting");
         String ssmParameterPath = getSsmParameterPath();
     	ArrayList<Properties> allProperties = new ArrayList<Properties>();
@@ -335,9 +340,21 @@ public class FixEngine implements Application {
             	}
             }
         }
+        
+        // This is a wourkaround for a bug in sessionSettings where simply setting properties in the "session" section 
+        // gets reflected in the underlying Hashtables and toString() but not in the date it exposes to the Fix SocketAcceptor/SocketInitiator constructor
+        // resulting in token strings like "<TargetCompID>" being used by the resulting FIX engine instead of the overridden values
+        ByteArrayOutputStream oos = new ByteArrayOutputStream();
+        sessionSettings.toStream(oos);
+        oos.flush();
+        oos.close();
+        InputStream is = new ByteArrayInputStream(oos.toByteArray());
+        SessionSettings newSessionSettings = new SessionSettings(is);
+//        LOGGER.info(MY_IP+"INITIALIZE PARAMETERS: rewrote new SessionSettings after overriding: " + sessionSettings);
+        return newSessionSettings;
     }
 
-    public static SessionSettings initializeParameters(String configfile) throws ConfigError {
+    public static SessionSettings initializeParameters(String configfile) throws ConfigError, IOException {
     	LOGGER.info(MY_IP+"****INITIALIZE PARAMETERS starting");    	
     	SessionSettings sessionSettings = null;
     	try {
@@ -350,7 +367,8 @@ public class FixEngine implements Application {
 
         setLogLevel(true);
 
-        overrideConfigFromSsmParameters(sessionSettings);
+        sessionSettings = overrideConfigFromSsmParameters(sessionSettings);
+        
         if ("<DebugLogging>".equals(sessionSettings.getString("DebugLogging"))) {
         	sessionSettings.setString("DebugLogging","false");
         }        
@@ -389,7 +407,7 @@ public class FixEngine implements Application {
         String ordStr = kafkaMessage.value().toString();
         Message parsedOrd = null;
         try {
-            parsedOrd = quickfix.MessageUtils.parse(FIX_OUTBOUND_SESSION, ordStr);
+            parsedOrd = quickfix.MessageUtils.parse(FIX_SESSION, ordStr);
         } catch (InvalidMessage e) {
         	LOGGER.severe(MY_IP+"ERROR PARSING MESSAGE: " + ordStr);
             e.printStackTrace();
@@ -400,7 +418,7 @@ public class FixEngine implements Application {
         //[CLIENT FIX ENGINE] SEND ORDER FIX TO SERVER FIX ENGINE
         try {
         	LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: SENDING MESSAGE TO FIX: " + parsedOrd);	        	        	
-            Session.sendToTarget(parsedOrd, FIX_OUTBOUND_SESSION_ID);
+            Session.sendToTarget(parsedOrd, FIX_SESSION_ID);
         } catch (SessionNotFound se) {
         	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: SessionNotFound: " + se);
             se.printStackTrace();
@@ -413,7 +431,7 @@ public class FixEngine implements Application {
     private static void processInboundKafkaMsgs(KafkaConsumer<String, Object> kafkaConsumer) {
         LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: ************* after calling getKafkaConsumer ");
         int count = 0;
-        if(IM_AM_THE_ACTIVE_ENGINE && FIX_OUTBOUND_SESSION_ID != null) {
+        if(IM_AM_THE_ACTIVE_ENGINE && FIX_SESSION_ID != null) {
             //Test code
    //       NewOrderSingle newOrder = new NewOrderSingle(new ClOrdID("12345"), new HandlInst('1'), new Symbol("6758.T"), new Side(Side.BUY), new TransactTime(), new OrdType(OrdType.MARKET));
             // try {
@@ -484,7 +502,7 @@ public class FixEngine implements Application {
         endpointConfiguration.add(new EndpointConfiguration().withEndpointId(activeEndpoint).withWeight(100));
         endpointConfiguration.add(new EndpointConfiguration().withEndpointId(passiveEndpoint).withWeight(0));
         LOGGER.info(MY_IP+"UPDATE GA ENDPOINT flipping to myGaEndpointArn: "+ myGaEndpointArn + " with endpointConfiguration: " + endpointConfiguration);
-        amazonGlobalAcceleratorClient.updateEndpointGroup(new UpdateEndpointGroupRequest().withEndpointGroupArn(myGaEndpointArn).withEndpointConfigurations(endpointConfiguration));
+        amazonGlobalAcceleratorClient.updateEndpointGroup(new UpdateEndpointGroupRequest().withEndpointGroupArn(myGaEndpointGroupArn).withEndpointConfigurations(endpointConfiguration));
     }
 
 	private static CallableStatement getHeartbeatSprocStmt(String jdbcDriver, String jdbcUrl, String jdbcUser, String jdbcPass) {
@@ -562,12 +580,12 @@ public class FixEngine implements Application {
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_SERVER object created: " + FIX_SERVER);	    	
 	    }
 
-	    if(FIX_INBOUND_SESSION!=null) {
+	    if(FIX_SESSION!=null) {
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_INBOUND_SESSION object already exists!");
 	    } else {
 	    	FIX_SERVER.start();
-	    	FIX_INBOUND_SESSION = Session.lookupSession(FIX_SERVER.getSessions().get(0));
-		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_INBOUND_SESSION object created: " + FIX_INBOUND_SESSION);
+	    	FIX_SESSION = Session.lookupSession(FIX_SERVER.getSessions().get(0));
+		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_INBOUND_SESSION object created: " + FIX_SESSION);
 	    }
     }
 
@@ -591,14 +609,14 @@ public class FixEngine implements Application {
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_CLIENT object created: " + FIX_CLIENT);	    	
 	    }
 
-	    if(FIX_OUTBOUND_SESSION_ID!=null) {
+	    if(FIX_SESSION_ID!=null) {
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION_ID object already exists!");
 	    } else {
 	        FIX_CLIENT.start();
-	        FIX_OUTBOUND_SESSION = Session.lookupSession(FIX_CLIENT.getSessions().get(0)); 
-		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION object created: " + FIX_OUTBOUND_SESSION);
+	        FIX_SESSION = Session.lookupSession(FIX_CLIENT.getSessions().get(0)); 
+		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION object created: " + FIX_SESSION);
 	
-	        while(FIX_OUTBOUND_SESSION_ID == null) {
+	        while(FIX_SESSION_ID == null) {
 		        LOGGER.info(MY_IP+"****QUICKFIX CLIENT START: WAITING FOR SERVER..." );
 		        try {
 		          Thread.sleep(500);  
@@ -606,14 +624,14 @@ public class FixEngine implements Application {
 		            LOGGER.info(MY_IP+"****QUICKFIX CLIENT START: FixEngine THREAD INTERRUPTED: " + ie);
 		        }
 		    }
-		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION_ID connection established: " + FIX_OUTBOUND_SESSION_ID);
+		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION_ID connection established: " + FIX_SESSION_ID);
 	    }
     }
 
     private static void stopFixServer(){
 	    LOGGER.info(MY_IP+"****STOPPING FIX SERVER APPLICATION");           
     	FIX_SERVER.stop();
-	    FIX_OUTBOUND_SESSION=null;
+    	FIX_SESSION=null;
 	    FIX_SERVER=null;
     }
 
@@ -622,9 +640,9 @@ public class FixEngine implements Application {
 	    if(FIX_CLIENT != null) {
 	    	FIX_CLIENT.stop();
 	    }
-	    FIX_OUTBOUND_SESSION_ID=null;
+	    FIX_SESSION_ID=null;
         FIX_CLIENT=null;
-        FIX_OUTBOUND_SESSION_ID=null;
+        FIX_SESSION=null;
     }
 
     private static void heartbeatMessageProcessingLoop(SessionSettings sessionSettings) throws ConfigError {
@@ -638,8 +656,11 @@ public class FixEngine implements Application {
     	String myGAEndpointArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointArn");
     	boolean useJdbcConnection = "true".equals(sessionSettings.getString("UseJdbcHeartbeat"));
         
-        addSqlDbConnectionCoordinatesToSettings(sessionSettings.getString("RDSClusterSecretArn"), sessionSettings);
-        CallableStatement heartbeatSprocStmt = getHeartbeatSprocStmt(sessionSettings.getString("JdbcDriver"), sessionSettings.getString("JdbcURL"), sessionSettings.getString("JdbcUser"), sessionSettings.getString("JdbcPassword"));
+    	CallableStatement heartbeatSprocStmt = null;
+        if(useJdbcConnection) {
+        	addSqlDbConnectionCoordinatesToSettings(sessionSettings.getString("RDSClusterSecretArn"), sessionSettings);
+            heartbeatSprocStmt = getHeartbeatSprocStmt(sessionSettings.getString("JdbcDriver"), sessionSettings.getString("JdbcURL"), sessionSettings.getString("JdbcUser"), sessionSettings.getString("JdbcPassword"));
+        }
 
 //        startFixServer(sessionSettings); // to let health check know we're alive
 
@@ -686,11 +707,12 @@ public class FixEngine implements Application {
         }
     }
 
-    public static void main(String[] args) throws ConfigError, FileNotFoundException, InterruptedException, SessionNotFound {
+    public static void main(String[] args) throws ConfigError, InterruptedException, SessionNotFound, IOException {
         LOGGER.setLevel(Level.INFO);
         // LOGGER.setLevel(Level.FINE);
 
         String configfile = "config/server.cfg";
+//        String configfile = "config/client.cfg";
         if(args.length > 0) {
             configfile = args[0];
         }
