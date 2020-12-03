@@ -1,6 +1,10 @@
 Conditions:
+  CreateAlarms: !Not
+    - !Equals
+      - ''
+      - !Ref 'SNSTopicArn'
   CreateEndpointRecord: !And
-    - !Condition 'IsInitiatorStack'
+    - !Condition 'IsAcceptorStack'
     - !Condition 'HostedZoneSupplied'
     - !Condition 'FIXServerDNSNameSupplied'
   FIXServerDNSNameSupplied: !Not
@@ -17,20 +21,18 @@ Conditions:
   IsInitiatorStack: !Equals
     - initiator
     - !Ref 'ConnectionType'
-  IsUSEast1: !Equals
-    - us-east-1
-    - !Ref 'AWS::Region'
-  SNSTopicSupplied: !Not
-    - !Equals
-      - ''
-      - !Ref 'SNSTopicArn'
+  KafkaTLSEnabled: !Equals
+    - 'true'
+    - !Ref 'KafkaConnTLS'
+  UseDefaultImage: !Equals
+    - ''
+    - !Ref 'CustomImagePath'
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
           default: FIX Configuration
         Parameters:
-          - FargateImagePath
           - FIXServerPort
           - ConnectionType
           - DebugLogging
@@ -38,6 +40,7 @@ Metadata:
           - SenderCompID
           - KafkaConnTLS
           - ApplicationID
+          - CustomImagePath
       - Label:
           default: Networking
         Parameters:
@@ -61,33 +64,43 @@ Metadata:
         Parameters:
           - SNSTopicArn
     ParameterLabels:
+      CustomImagePath:
+        default: Image Path
       FIXClientCIDRs:
         default: FIX Client CIDRs
       FIXServerDNSName:
         default: FIX Server DNS Name
+      FailoverPrivateSubnet:
+        default: Failover Private Subnet
       FailoverPrivateSubnetCIDR:
         default: Failover Private Subnet CIDR
+      FailoverPublicSubnet:
+        default: Failover Public Subnet
       FailoverPublicSubnetCIDR:
         default: Failover Public Subnet CIDR
-      FargateImagePath:
-        default: Image Path
       HostedZoneID:
         default: Hosted Zone
+      PrimaryPrivateSubnet:
+        default: Primary Private Subnet
       PrimaryPrivateSubnetCIDR:
         default: Primary Private Subnet CIDR
+      PrimaryPublicSubnet:
+        default: Primary Public Subnet
       PrimaryPublicSubnetCIDR:
         default: Primary Public Subnet CIDR
       SNSTopicArn:
         default: Target SNS Topic
       UserApplicationCIDRs:
         default: User Application CIDRs
+      VPC:
+        default: VPC
       VpcCIDR:
         default: VPC CIDR
-  Comments: FIX Engine POC
+  Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.20
-  LastUpdated: November 24, 2020
-  Version: v1.20
+  Description: FIXEngineOnAWS - v1.23
+  LastUpdated: December 03, 2020
+  Version: v1.23
 Outputs:
   ApplicationID:
     Condition: ''
@@ -125,15 +138,18 @@ Outputs:
   KafkaConnTLS:
     Condition: ''
     Value: !Ref 'KafkaConnTLS'
+  KafkaPort:
+    Condition: ''
+    Value: !If
+      - KafkaTLSEnabled
+      - '9094'
+      - '9092'
   NATGatewayIPAddresses:
     Condition: ''
     Value: !Join
       - ','
       - - !Ref 'PrimaryNATGatewayEIP'
         - !Ref 'FailoverNATGatewayEIP'
-  NonTLSKafkaPort:
-    Condition: ''
-    Value: '9092'
   PrimaryMSKEndpoint:
     Condition: ''
     Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
@@ -146,9 +162,6 @@ Outputs:
   SenderCompID:
     Condition: ''
     Value: !Ref 'SenderCompID'
-  TLSKafkaPort:
-    Condition: ''
-    Value: '9094'
   TargetCompID:
     Condition: ''
     Value: !Ref 'TargetCompID'
@@ -162,7 +175,15 @@ Parameters:
       - acceptor
       - initiator
     Default: acceptor
-    Description: ''
+    Description: The engine role to be deployed - acceptor for server, initiator for
+      client
+    Type: String
+  CustomImagePath:
+    Default: ''
+    Description: "[Optional] This CloudFormation stack will create a Docker image\
+      \ to be used by ECS. If you wish to use your own image, specify the path here.\
+      \ \n        Up to 255 letters (uppercase and lowercase), numbers, hyphens, underscores,\
+      \ colons, periods, forward slashes, and number signs are allowed."
     Type: String
   DebugLogging:
     AllowedValues:
@@ -177,13 +198,13 @@ Parameters:
       to your ingestion endpoint. (Max. 5)
     Type: CommaDelimitedList
   FIXServerDNSName:
+    Default: ''
     Description: If you are the acceptor, this will be the domain name created that
       points to your Global Accelerator Endpoint (e.g., fix.example.com)
     Type: String
   FIXServerPort:
     Default: 9877
-    Description: The optionally non-standard port you would like to use for message
-      ingestion.
+    Description: Port number used to create FIX connection.
     MaxValue: 65535
     MinValue: 1
     Type: Number
@@ -195,13 +216,8 @@ Parameters:
     Default: 10.10.2.0/23
     Description: The CIDR range you wish to use for your failover public subnet.
     Type: String
-  FargateImagePath:
-    Default: httpd:2.4
-    Description: The image used to start your ingestion container. Up to 255 letters
-      (uppercase and lowercase), numbers, hyphens, underscores, colons, periods, forward
-      slashes, and number signs are allowed.
-    Type: String
   HostedZoneID:
+    Default: ''
     Description: '[Required for Acceptor Stack] If you are the acceptor, this should
       be the Hosted Zone ID for the domain hosted in Route53.'
     Type: String
@@ -210,7 +226,7 @@ Parameters:
       - 'true'
       - 'false'
     Default: 'true'
-    Description: ''
+    Description: Choose True to enable TLS encryption for your Kafka connection
     Type: String
   PrimaryPrivateSubnetCIDR:
     Default: 10.10.4.0/23
@@ -221,6 +237,7 @@ Parameters:
     Description: The CIDR range you wish to use for your primary public subnet.
     Type: String
   SNSTopicArn:
+    Default: ''
     Description: '[Optional] The SNS Topic ARN you would like alerts sent to related
       to the resources in this stack.'
     Type: String
@@ -230,7 +247,7 @@ Parameters:
     Type: String
   TargetCompID:
     Default: client
-    Description: ''
+    Description: Computer ID used to initiate FIX communication
     Type: String
   UserApplicationCIDRs:
     Default: '0.0.0.0/0'
@@ -272,14 +289,16 @@ Resources:
           \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
           \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
           \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ event['RequestType'] in ['Create']:\n        \n        ssm_client = boto3.client('ssm')\n\
-          \        \n        try:\n        \n            response = ssm_client.start_automation_execution(\n\
+          \ 'EligibleRequestTypes' not in properties:\n        properties['EligibleRequestTypes']\
+          \ = ['Create']\n    \n    if event['RequestType'] in properties['EligibleRequestTypes']:\n\
+          \        \n        ssm_client = boto3.client('ssm')\n        \n        try:\n\
+          \        \n            response = ssm_client.start_automation_execution(\n\
           \                DocumentName = properties['AutomationDocumentName'],\n\
           \            )\n        \n            return cfnresponse.send(event, context,\
           \ cfnresponse.SUCCESS, responseData, properties['AutomationDocumentName'])\n\
           \        \n        except ClientError as e:\n        \n            print(str(e))\n\
           \            return cfnresponse.send(event, context, cfnresponse.FAILED,\
-          \ responseData)\n    \n    elif event['RequestType'] in ['Update', 'Delete']:\n\
+          \ responseData)\n    \n    elif event['RequestType'] not in properties['EligibleRequestTypes']:\n\
           \        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
           \ responseData)"
       Description: !Join
@@ -297,14 +316,19 @@ Resources:
     DependsOn:
       - AutomationDocumentStarterFunction
     Properties:
-      LogGroupName: !Ref 'AutomationDocumentStarterFunction'
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'AutomationDocumentStarterFunction'
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   AutomationDocumentStarterRole:
     Condition: ''
     DependsOn:
+      - ECSImageBuildDocument
       - MSKInitializationDocument
       - RDSInitializationDocument
+      - ECSImageBuildExecutionRole
       - MSKClusterPrepExecutionRole
       - RDSClusterPrepExecutionRole
     Properties:
@@ -325,17 +349,23 @@ Resources:
                   - iam:PassRole
                 Effect: Allow
                 Resource:
+                  - !GetAtt 'ECSImageBuildExecutionRole.Arn'
                   - !GetAtt 'MSKClusterPrepExecutionRole.Arn'
-              - Action:
-                  - iam:PassRole
-                Effect: Allow
-                Resource:
                   - !GetAtt 'RDSClusterPrepExecutionRole.Arn'
               - Action:
                   - ssm:StartAutomationExecution
                 Effect: Allow
                 Resource:
                   - '*'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ssm:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :automation-definition/
+                      - !Ref 'ECSImageBuildDocument'
+                      - :1}
                   - !Join
                     - ''
                     - - 'arn:aws:ssm:'
@@ -356,6 +386,53 @@ Resources:
                       - :1}
           PolicyName: primary-policy
     Type: AWS::IAM::Role
+  CloudWatchDashboard:
+    Properties:
+      DashboardBody: !Sub
+        - "{\n   \"start\": \"-PT3H\",\n   \"periodOverride\": \"inherit\",\n    \"\
+          widgets\": [\n        {\n            \"type\": \"metric\",\n           \
+          \ \"properties\": {\n                \"view\": \"timeSeries\",\n       \
+          \         \"width\": 20,\n                \"height\": 12,\n            \
+          \    \"title\": \"Fargate Resource Utlization\",\n                \"period\"\
+          : 300,\n                \"stacked\": false,\n                \"metrics\"\
+          : [\n                    [\n                        \"AWS/ECS\", \n    \
+          \                    \"MemoryUtilization\", \n                        \"\
+          ServiceName\", \n                        \"${PRIMARY_ECS_SERVICE_NAME}\"\
+          ,\n                        \"ClusterName\", \n                        \"\
+          ${PRIMARY_ECS_CLUSTER_NAME}\",\n                        {\n            \
+          \                \"label\": \"PrimaryMemUtilization\"\n                \
+          \        }\n                    ],\n                    [ \n           \
+          \             \"AWS/ECS\", \n                        \"CPUUtilization\"\
+          , \n                        \"ServiceName\", \n                        \"\
+          ${PRIMARY_ECS_SERVICE_NAME}\",\n                        \"ClusterName\"\
+          , \n                        \"${PRIMARY_ECS_CLUSTER_NAME}\",\n         \
+          \               {\n                            \"label\": \"PrimaryCPUUtilization\"\
+          \n                        }\n                    ],\n                  \
+          \  [\n                        \"AWS/ECS\", \n                        \"\
+          MemoryUtilization\", \n                        \"ServiceName\", \n     \
+          \                   \"${FAILOVER_ECS_SERVICE_NAME}\",\n                \
+          \        \"ClusterName\", \n                        \"${FAILOVER_ECS_CLUSTER_NAME}\"\
+          ,\n                        {\n                            \"label\": \"\
+          FailoverMemUtilization\"\n                        }\n                  \
+          \  ],\n                    [ \n                        \"AWS/ECS\", \n \
+          \                       \"CPUUtilization\", \n                        \"\
+          ServiceName\", \n                        \"${FAILOVER_ECS_SERVICE_NAME}\"\
+          ,\n                        \"ClusterName\", \n                        \"\
+          ${FAILOVER_ECS_CLUSTER_NAME}\",\n                        {\n           \
+          \                 \"label\": \"FailoverCPUUtilization\"\n              \
+          \          }\n                    ]\n                ],\n              \
+          \  \"region\": \"us-east-1\"\n            }\n        }\n    ]\n}"
+        - FAILOVER_ECS_CLUSTER_NAME: !Ref 'FailoverECSCluster'
+          FAILOVER_ECS_SERVICE_NAME: !If
+            - IsInitiatorStack
+            - !Ref 'FailoverInitiatorECSService'
+            - !Ref 'FailoverAcceptorECSService'
+          PRIMARY_ECS_CLUSTER_NAME: !Ref 'PrimaryECSCluster'
+          PRIMARY_ECS_SERVICE_NAME: !If
+            - IsInitiatorStack
+            - !Ref 'PrimaryInitiatorECSService'
+            - !Ref 'PrimaryAcceptorECSService'
+    Type: AWS::CloudWatch::Dashboard
   ConnectionTypeParam:
     Condition: ''
     Properties:
@@ -390,6 +467,353 @@ Resources:
       Type: String
       Value: !Ref 'DebugLogging'
     Type: AWS::SSM::Parameter
+  ECRRepository:
+    Properties:
+      ImageScanningConfiguration:
+        scanOnPush: true
+      RepositoryName: !Join
+        - ''
+        - - fix-engine-on-aws/
+          - !Ref 'AWS::StackName'
+    Type: AWS::ECR::Repository
+  ECSImageBuildDocument:
+    DependsOn:
+      - ECRRepository
+      - ECSImageBuildSecurityGroup
+      - ECSImageBuildExecutionRole
+      - ECSImageBuildInstanceRoleProfile
+    Properties:
+      Content:
+        assumeRole: !GetAtt 'ECSImageBuildExecutionRole.Arn'
+        description: !Join
+          - ''
+          - - 'Creates the client and server images use by CloudFormation stack '
+            - !Ref 'AWS::StackName'
+        mainSteps:
+          - action: aws:runInstances
+            inputs:
+              BlockDeviceMappings:
+                - DeviceName: /dev/sda1
+                  Ebs:
+                    Encrypted: true
+                    VolumeSize: 8
+                    VolumeType: gp2
+              IamInstanceProfileName: !Ref 'ECSImageBuildInstanceRoleProfile'
+              ImageId: '{{LatestAmazonLinux2AMIId}}'
+              InstanceType: t3a.small
+              MaxInstanceCount: 1
+              MinInstanceCount: 1
+              SecurityGroupIds:
+                - !Ref 'ECSImageBuildSecurityGroup'
+              SubnetId: !Ref 'PrimaryPrivateSubnet'
+              TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                    - Key: Name
+                      Value: !Join
+                        - '-'
+                        - - !Ref 'AWS::StackName'
+                          - ECSImageBuilder
+                    - Key: LaunchedBy
+                      Value: SSMAutomation
+                    - Key: StackName
+                      Value: !Ref 'AWS::StackName'
+            maxAttempts: 3
+            name: LaunchInstance
+            onFailure: step:SignalFailure
+            timeoutSeconds: 300
+          - action: aws:runCommand
+            inputs:
+              CloudWatchOutputConfig:
+                CloudWatchLogGroupName: !Ref 'ECSImageBuildLogGroup'
+                CloudWatchOutputEnabled: 'true'
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - '{{LaunchInstance.InstanceIds}}'
+              Parameters:
+                commands:
+                  - sudo yum update
+                  - sudo yum install jq git docker java-1.8.0-openjdk-devel -y
+                  - '# Installs Gradle'
+                  - sudo wget -c https://services.gradle.org/distributions/gradle-6.6.1-all.zip
+                  - sudo unzip gradle-6.6.1-all.zip -d /opt
+                  - sudo ln -s /opt/gradle-6.6.1 /opt/gradle
+                  - export GRADLE_HOME=/opt/gradle
+                  - export PATH=$PATH:\/opt/gradle/bin
+                  - cd ~
+                  - git clone https://github.com/aws-samples/amazon-resilient-fix-engine-demo.git
+                  - cd amazon-resilient-fix-engine-demo
+                  - !Join
+                    - ' '
+                    - - sh scripts/dockerbuild.sh --ecr-repo-name
+                      - !Ref 'ECRRepository'
+                      - --engine-role
+                      - !If
+                        - IsAcceptorStack
+                        - Server
+                        - Client
+            name: BuildECSImage
+            onFailure: step:TerminateInstanceOnFailure
+          - action: aws:executeAwsApi
+            inputs:
+              Api: TerminateInstances
+              InstanceIds:
+                - '{{LaunchInstance.InstanceIds}}'
+              Service: ec2
+            name: TerminateInstanceOnSuccess
+            onFailure: step:SignalFailure
+          - action: aws:executeAwsApi
+            inputs:
+              Api: SignalResource
+              LogicalResourceId: ECSImageBuildWaiter
+              Service: cloudformation
+              StackName: !Ref 'AWS::StackName'
+              Status: SUCCESS
+              UniqueId: !Ref 'AWS::StackName'
+            isEnd: true
+            name: SignalSuccess
+            onFailure: step:SignalFailure
+          - action: aws:executeAwsApi
+            inputs:
+              Api: TerminateInstances
+              InstanceIds:
+                - '{{LaunchInstance.InstanceIds}}'
+              Service: ec2
+            name: TerminateInstanceOnFailure
+            onFailure: step:SignalFailure
+          - action: aws:executeAwsApi
+            inputs:
+              Api: SignalResource
+              LogicalResourceId: ECSImageBuildWaiter
+              Service: cloudformation
+              StackName: !Ref 'AWS::StackName'
+              Status: FAILURE
+              UniqueId: !Ref 'AWS::StackName'
+            isEnd: true
+            name: SignalFailure
+        parameters:
+          LatestAmazonLinux2AMIId:
+            default: '{{ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs}}'
+            description: The latest Amazon Linux 2 AMI queried from the public parameter.
+            type: String
+        schemaVersion: '0.3'
+      DocumentType: Automation
+    Type: AWS::SSM::Document
+  ECSImageBuildExecutionRole:
+    DependsOn:
+      - ECSImageBuildLogGroup
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ssm.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource:
+                  - '*'
+                  - !GetAtt 'ECSImageBuildLogGroup.Arn'
+                  - !Join
+                    - /
+                    - - !GetAtt 'ECSImageBuildLogGroup.Arn'
+                      - '*'
+              - Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - '*'
+              - Action:
+                  - cloudformation:SignalResource
+                Effect: Allow
+                Resource:
+                  - !Ref 'AWS::StackId'
+          PolicyName: primary-policy
+    Type: AWS::IAM::Role
+  ECSImageBuildInstanceRole:
+    DependsOn: []
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:InitiateLayerUpload
+                  - ecr:CompleteLayerUpload
+                  - ecr:BatchCheckLayerAvailability
+                Effect: Allow
+                Resource:
+                  - !GetAtt 'ECRRepository.Arn'
+              - Action:
+                  - ecr:GetAuthorizationToken
+                Effect: Allow
+                Resource:
+                  - '*'
+          PolicyName: primary-policy
+    Type: AWS::IAM::Role
+  ECSImageBuildInstanceRoleProfile:
+    DependsOn:
+      - ECSImageBuildInstanceRole
+    Properties:
+      Path: /
+      Roles:
+        - !Ref 'ECSImageBuildInstanceRole'
+    Type: AWS::IAM::InstanceProfile
+  ECSImageBuildLogGroup:
+    Properties:
+      LogGroupName: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - ECSImageBuild
+      RetentionInDays: 7
+    Type: AWS::Logs::LogGroup
+  ECSImageBuildSecurityGroup:
+    DependsOn:
+      - VPC
+      - PrimaryPrivateSubnet
+    Properties:
+      GroupDescription: Security Group for EC2 Instances Launched via SSM Automation
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::SecurityGroup
+  ECSImageBuildStarter:
+    DependsOn:
+      - ECRRepository
+      - ECSImageBuildDocument
+      - AutomationDocumentStarterFunction
+      - AutomationDocumentStarterLogGroup
+    Properties:
+      Properties:
+        AutomationDocumentName: !Ref 'ECSImageBuildDocument'
+        EligibleRequestTypes:
+          - Create
+          - Update
+        RepositoryName: !Ref 'ECRRepository'
+        TemplateVersion: '1.23'
+      ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
+      Type: Custom::StartSSMAutomationDocument
+      Version: '1.0'
+    Type: AWS::CloudFormation::CustomResource
+  ECSImageBuildWaiter:
+    CreationPolicy:
+      ResourceSignal:
+        Count: 1
+        Timeout: PT10M
+    DependsOn:
+      - ECSImageBuildDocument
+      - AutomationDocumentStarterLogGroup
+    Type: AWS::CloudFormation::WaitCondition
+  ECSImageRemover:
+    DependsOn:
+      - ECRRepository
+      - ECSImageRemoverFunction
+      - ECSImageRemoverLogGroup
+    Properties:
+      Properties:
+        RepositoryName: !Ref 'ECRRepository'
+      ServiceToken: !GetAtt 'ECSImageRemoverFunction.Arn'
+      Type: Custom::ECSImageRemover
+      Version: '1.0'
+    Type: AWS::CloudFormation::CustomResource
+  ECSImageRemoverFunction:
+    Condition: ''
+    DependsOn:
+      - ECSImageRemoverRole
+    Properties:
+      Code:
+        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
+          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
+          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\ndef handler(event,\
+          \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
+          \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
+          \ event['RequestType'] in ['Delete']:\n        \n        ecr_client = boto3.client('ecr')\n\
+          \n        try:\n            \n            existing_images = ecr_client.describe_images(\n\
+          \                repositoryName = properties['RepositoryName']\n       \
+          \     )\n            \n            if len(existing_images['imageDetails'])\
+          \ > 0:\n                \n                images_to_delete = []\n      \
+          \          for image in existing_images['imageDetails']:\n             \
+          \       \n                    images_to_delete.append({\n              \
+          \          'imageDigest': image['imageDigest']\n                    })\n\
+          \                    \n                ecr_client.batch_delete_image(\n\
+          \                    repositoryName = properties['RepositoryName'],\n  \
+          \                  imageIds = images_to_delete\n                )\n    \
+          \            \n            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
+          \ responseData, properties['RepositoryName'])\n            \n        except\
+          \ ClientError as e:\n        \n            print(str(e))\n            return\
+          \ cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n \
+          \   \n    elif event['RequestType'] in ['Create', 'Update']:\n        \n\
+          \        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
+      Description: !Join
+        - ''
+        - - 'ECSImageRemover resource for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Handler: index.handler
+      Role: !GetAtt 'ECSImageRemoverRole.Arn'
+      Runtime: python3.7
+      Timeout: 15
+    Type: AWS::Lambda::Function
+  ECSImageRemoverLogGroup:
+    Condition: ''
+    DependsOn:
+      - ECSImageRemoverFunction
+    Properties:
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'ECSImageRemoverFunction'
+      RetentionInDays: 30
+    Type: AWS::Logs::LogGroup
+  ECSImageRemoverRole:
+    Condition: ''
+    DependsOn:
+      - ECRRepository
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecr:DescribeImages
+                  - ecr:BatchDeleteImage
+                Effect: Allow
+                Resource:
+                  - !GetAtt 'ECRRepository.Arn'
+          PolicyName: primary-policy
+    Type: AWS::IAM::Role
   FIXClientPrefixListUpdater:
     DependsOn:
       - FIXClientVPCPrefixList
@@ -484,11 +908,13 @@ Resources:
   FailoverAcceptorECSTaskDefinition:
     Condition: IsAcceptorStack
     DependsOn:
+      - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
+      - ECSImageBuildWaiter
       - GlobalAccelerator
     Properties:
       ContainerDefinitions:
@@ -510,7 +936,17 @@ Resources:
                 - !Ref 'FailoverNLB'
                 - ''
           Essential: 'true'
-          Image: !Ref 'FargateImagePath'
+          Image: !If
+            - UseDefaultImage
+            - !Join
+              - ''
+              - - !Ref 'AWS::AccountId'
+                - .dkr.ecr.
+                - !Ref 'AWS::Region'
+                - .amazonaws.com/
+                - !Ref 'ECRRepository'
+                - :latest
+            - !Ref 'CustomImagePath'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -556,11 +992,13 @@ Resources:
   FailoverInitiatorECSTaskDefinition:
     Condition: IsInitiatorStack
     DependsOn:
+      - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
+      - ECSImageBuildWaiter
     Properties:
       ContainerDefinitions:
         - Environment:
@@ -571,7 +1009,17 @@ Resources:
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
           Essential: 'true'
-          Image: !Ref 'FargateImagePath'
+          Image: !If
+            - UseDefaultImage
+            - !Join
+              - ''
+              - - !Ref 'AWS::AccountId'
+                - .dkr.ecr.
+                - !Ref 'AWS::Region'
+                - .amazonaws.com/
+                - !Ref 'ECRRepository'
+                - :latest
+            - !Ref 'CustomImagePath'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -749,7 +1197,7 @@ Resources:
     DependsOn:
       - VPC
     Properties:
-      HealthCheckProtocol: TCP
+      HealthCheckEnabled: 'true'
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
       TargetGroupAttributes:
@@ -785,6 +1233,7 @@ Resources:
     DependsOn:
       - Route53HealthCheckVPCPrefixList
       - VPC
+      - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for Fargate Tasks
       SecurityGroupIngress:
@@ -1038,7 +1487,10 @@ Resources:
     DependsOn:
       - GlobalAcceleratorInfoRetrieverFunction
     Properties:
-      LogGroupName: !Ref 'GlobalAcceleratorInfoRetrieverFunction'
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'GlobalAcceleratorInfoRetrieverFunction'
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   GlobalAcceleratorInfoRetrieverRole:
@@ -1111,6 +1563,26 @@ Resources:
       Tier: Standard
       Type: String
       Value: !Ref 'KafkaConnTLS'
+    Type: AWS::SSM::Parameter
+  KafkaPortParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'Kafka connection port for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - KafkaPort
+      Tier: Standard
+      Type: String
+      Value: !If
+        - KafkaTLSEnabled
+        - '9094'
+        - '9092'
     Type: AWS::SSM::Parameter
   MSKCluster:
     DependsOn:
@@ -1198,7 +1670,10 @@ Resources:
     DependsOn:
       - MSKClusterInfoRetrieverFunction
     Properties:
-      LogGroupName: !Ref 'MSKClusterInfoRetrieverFunction'
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'MSKClusterInfoRetrieverFunction'
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   MSKClusterInfoRetrieverRole:
@@ -1234,6 +1709,8 @@ Resources:
     Properties:
       Properties:
         AutomationDocumentName: !Ref 'MSKInitializationDocument'
+        EligibleRequestTypes:
+          - Create
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -1247,6 +1724,29 @@ Resources:
       - MSKInitializationDocument
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
+  MSKClusterMemoryAlarm:
+    Condition: CreateAlarms
+    DependsOn:
+      - MSKCluster
+    Properties:
+      ActionsEnabled: 'true'
+      AlarmActions:
+        - !Ref 'SNSTopicArn'
+      AlarmDescription: Alerts when MSK cluster's memory utilization exceeds 80%
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: Cluster Name
+          Value: !Ref 'MSKCluster'
+      EvaluationPeriods: 2
+      MetricName: MemoryUsed
+      Namespace: AWS/Kafka
+      OKActions:
+        - !Ref 'SNSTopicArn'
+      Period: 60
+      Statistic: Average
+      Threshold: '80'
+      TreatMissingData: notBreaching
+    Type: AWS::CloudWatch::Alarm
   MSKClusterPrepExecutionRole:
     DependsOn:
       - MSKClusterPrepLogGroup
@@ -1333,6 +1833,7 @@ Resources:
   MSKClusterPrepSecurityGroup:
     DependsOn:
       - VPC
+      - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for MSK Cluster Prep
       VpcId: !Ref 'VPC'
@@ -1342,29 +1843,32 @@ Resources:
       - FargateSecurityGroup
       - MSKClusterPrepSecurityGroup
       - VPC
+      - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for MSK Cluster
       SecurityGroupIngress:
         - Description: MSK Access for Private User App Ranges
-          FromPort: 9092
+          FromPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
           IpProtocol: tcp
           SourcePrefixListId: !Ref 'UserApplicationVPCPrefixList'
-          ToPort: 9092
-        - Description: MSK Access for Private User App Ranges
-          FromPort: 9094
-          IpProtocol: tcp
-          SourcePrefixListId: !Ref 'UserApplicationVPCPrefixList'
-          ToPort: 9094
+          ToPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
         - Description: Non TLS Communication
-          FromPort: 9092
+          FromPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
           IpProtocol: tcp
           SourceSecurityGroupId: !Ref 'FargateSecurityGroup'
-          ToPort: 9092
-        - Description: TLS Communication
-          FromPort: 9094
-          IpProtocol: tcp
-          SourceSecurityGroupId: !Ref 'FargateSecurityGroup'
-          ToPort: 9094
+          ToPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
         - Description: Zookeeper Administration
           FromPort: 2181
           IpProtocol: tcp
@@ -1512,23 +2016,6 @@ Resources:
         - - !Ref 'PrimaryNATGatewayEIP'
           - !Ref 'FailoverNATGatewayEIP'
     Type: AWS::SSM::Parameter
-  NonTLSKafkaPortParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Kafka connection port without TLS for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - NonTLSKafkaPort
-      Tier: Standard
-      Type: String
-      Value: '9092'
-    Type: AWS::SSM::Parameter
   PrimaryAcceptorECSService:
     Condition: IsAcceptorStack
     DependsOn:
@@ -1558,11 +2045,13 @@ Resources:
   PrimaryAcceptorECSTaskDefinition:
     Condition: IsAcceptorStack
     DependsOn:
+      - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
+      - ECSImageBuildWaiter
       - GlobalAccelerator
     Properties:
       ContainerDefinitions:
@@ -1584,7 +2073,17 @@ Resources:
                 - !Ref 'PrimaryNLB'
                 - ''
           Essential: 'true'
-          Image: !Ref 'FargateImagePath'
+          Image: !If
+            - UseDefaultImage
+            - !Join
+              - ''
+              - - !Ref 'AWS::AccountId'
+                - .dkr.ecr.
+                - !Ref 'AWS::Region'
+                - .amazonaws.com/
+                - !Ref 'ECRRepository'
+                - :latest
+            - !Ref 'CustomImagePath'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -1630,11 +2129,13 @@ Resources:
   PrimaryInitiatorECSTaskDefinition:
     Condition: IsInitiatorStack
     DependsOn:
+      - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
       - FargateExecutionRole
       - MSKClusterInfoRetriever
       - RDSClusterNonAdminSecret
+      - ECSImageBuildWaiter
     Properties:
       ContainerDefinitions:
         - Environment:
@@ -1645,7 +2146,17 @@ Resources:
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
           Essential: 'true'
-          Image: !Ref 'FargateImagePath'
+          Image: !If
+            - UseDefaultImage
+            - !Join
+              - ''
+              - - !Ref 'AWS::AccountId'
+                - .dkr.ecr.
+                - !Ref 'AWS::Region'
+                - .amazonaws.com/
+                - !Ref 'ECRRepository'
+                - :latest
+            - !Ref 'CustomImagePath'
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -1823,7 +2334,7 @@ Resources:
     DependsOn:
       - VPC
     Properties:
-      HealthCheckProtocol: TCP
+      HealthCheckEnabled: 'true'
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
       TargetGroupAttributes:
@@ -1925,6 +2436,8 @@ Resources:
     Properties:
       Properties:
         AutomationDocumentName: !Ref 'RDSInitializationDocument'
+        EligibleRequestTypes:
+          - Create
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -2101,6 +2614,7 @@ Resources:
     DependsOn:
       - FargateSecurityGroup
       - VPC
+      - PrimaryPrivateSubnet
     Properties:
       GroupDescription: !Join
         - ''
@@ -2329,7 +2843,7 @@ Resources:
                   - !Join
                     - ''
                     - - mysql --user $ADMIN_DB_USERNAME --host $DB_HOST --ssl-mode
-                        disabled --execute "source /tmp/rds-cluster-prep.sql"
+                        disabled --execute 'source /tmp/rds-cluster-prep.sql'
             name: CreateDBObjects
             onFailure: step:TerminateInstanceOnFailure
           - action: aws:executeAwsApi
@@ -2458,23 +2972,6 @@ Resources:
       Tier: Standard
       Type: String
       Value: !Ref 'SenderCompID'
-    Type: AWS::SSM::Parameter
-  TLSKafkaPortParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Kafka connection port with TLS for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - TLSKafkaPort
-      Tier: Standard
-      Type: String
-      Value: '9094'
     Type: AWS::SSM::Parameter
   TargetCompIDParam:
     Condition: ''
@@ -2607,7 +3104,10 @@ Resources:
     DependsOn:
       - VPCPrefixListManagerFunction
     Properties:
-      LogGroupName: !Ref 'VPCPrefixListManagerFunction'
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'VPCPrefixListManagerFunction'
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   VPCPrefixListManagerRole:
