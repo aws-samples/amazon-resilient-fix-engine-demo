@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -442,7 +443,7 @@ public class FixEngine implements Application {
             // }
             //Test COde 
             // Poll for records
-            ConsumerRecords<String, Object> records = kafkaConsumer.poll(50);
+            ConsumerRecords<String, Object> records = kafkaConsumer.poll(Duration.ofMillis(50));
             //LOGGER.fine(MY_IP+" After polling consumer records.count() : " + records.count());
             // Did we get any?
             if (records.count() == 0) {
@@ -662,7 +663,9 @@ public class FixEngine implements Application {
             heartbeatSprocStmt = getHeartbeatSprocStmt(sessionSettings.getString("JdbcDriver"), sessionSettings.getString("JdbcURL"), sessionSettings.getString("JdbcUser"), sessionSettings.getString("JdbcPassword"));
         }
 
-//        startFixServer(sessionSettings); // to let health check know we're alive
+        if(!iAmClientFixEngine) {
+        	startFixServer(sessionSettings); // to let health check know we're alive
+        }
 
         while(true) { 
 			LOGGER.info(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE);
@@ -711,7 +714,7 @@ public class FixEngine implements Application {
         LOGGER.setLevel(Level.INFO);
         // LOGGER.setLevel(Level.FINE);
 
-        String configfile = "config/server.cfg";
+        String configfile = "config/server_test.cfg";
 //        String configfile = "config/client.cfg";
         if(args.length > 0) {
             configfile = args[0];
