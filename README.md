@@ -4,8 +4,9 @@
 - The provided Cloud Formation template and FIX encoding/decoding libraries from the QuickFix project can be used to quickly stand up the engine and use Java, Python, C++, Ruby, .NET or GO to use it to send and receive messages with any other FIX engine.
 
 ## Vision
+-FIX (Financial Information eXchange) is a protocol that allows vastly different institutions, technologies and architectures to communicate financial data to each other with minimal coupling and coordination effort.
+- Example of a FIX message : Execution Report (Pipe character is used to represent SOH character): 8=FIX.4.2|9=176|35=8|49=PHLX|56=PERS|52=20071123-05:30:00.000|11=ATOMNOCCC9990900|20=3|150=E|39=E|55=MSFT|167=CS|54=1|38=15|40=2|44=15|58=PHLX EQUITY TESTING|59=0|47=C|32=0|31=0|151=15|14=0|6=0|10=128|
 - The FIX protocol has ushered in an era of straight-through processing in capital markets, replacing faxes and phone calls, and allowing firms to exchange data in real time.
-- Along with the FIX engine, the  protocol allows vastly different institutions, technologies and architectures to communicate financial data to each other with minimal coupling and coordination effort.
 - To achieve this, the FIX engine must be highly available and resilient against brief outages as well as data center failures, and allow participants to continue exchanging FIX messages.
 - As FIX evolves and is more widely adopted, it holds the promise of allowing real-time processing of all post-trade events such as reconciliations, money movements, settlements, risk calculations and corporate actions.
 - Upgrading the protocol and integrating new clients also requires extensive and labor-intensive testing of the proposed FIX infrastructure without disturbing existing Production connectivity.
