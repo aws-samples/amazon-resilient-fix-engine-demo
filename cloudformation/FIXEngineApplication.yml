@@ -98,9 +98,9 @@ Metadata:
         default: VPC CIDR
   Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.23
-  LastUpdated: December 03, 2020
-  Version: v1.23
+  Description: FIXEngineOnAWS - v1.24
+  LastUpdated: December 06, 2020
+  Version: v1.24
 Outputs:
   ApplicationID:
     Condition: ''
@@ -316,13 +316,7 @@ Resources:
     Type: AWS::Logs::LogGroup
   AutomationDocumentStarterRole:
     Condition: ''
-    DependsOn:
-      - ECSImageBuildDocument
-      - MSKInitializationDocument
-      - RDSInitializationDocument
-      - ECSImageBuildExecutionRole
-      - MSKClusterPrepExecutionRole
-      - RDSClusterPrepExecutionRole
+    DependsOn: []
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -334,49 +328,7 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - iam:PassRole
-                Effect: Allow
-                Resource:
-                  - !GetAtt 'ECSImageBuildExecutionRole.Arn'
-                  - !GetAtt 'MSKClusterPrepExecutionRole.Arn'
-                  - !GetAtt 'RDSClusterPrepExecutionRole.Arn'
-              - Action:
-                  - ssm:StartAutomationExecution
-                Effect: Allow
-                Resource:
-                  - '*'
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ssm:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :automation-definition/
-                      - !Ref 'ECSImageBuildDocument'
-                      - :1}
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ssm:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :automation-definition/
-                      - !Ref 'MSKInitializationDocument'
-                      - :1}
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ssm:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :automation-definition/
-                      - !Ref 'RDSInitializationDocument'
-                      - :1}
-          PolicyName: primary-policy
+      Policies: []
     Type: AWS::IAM::Role
   CloudWatchDashboard:
     Properties:
@@ -518,7 +470,7 @@ Resources:
             inputs:
               CloudWatchOutputConfig:
                 CloudWatchLogGroupName: !Ref 'ECSImageBuildLogGroup'
-                CloudWatchOutputEnabled: 'true'
+                CloudWatchOutputEnabled: true
               DocumentName: AWS-RunShellScript
               InstanceIds:
                 - '{{LaunchInstance.InstanceIds}}'
@@ -532,7 +484,7 @@ Resources:
                   - sudo ln -s /opt/gradle-6.6.1 /opt/gradle
                   - export GRADLE_HOME=/opt/gradle
                   - export PATH=$PATH:\/opt/gradle/bin
-                  - cd ~
+                  - cd /tmp
                   - git clone https://github.com/aws-samples/amazon-resilient-fix-engine-demo.git
                   - cd amazon-resilient-fix-engine-demo
                   - !Join
@@ -546,6 +498,7 @@ Resources:
                         - Client
             name: BuildECSImage
             onFailure: step:TerminateInstanceOnFailure
+            timeoutSeconds: 1800
           - action: aws:executeAwsApi
             inputs:
               Api: TerminateInstances
@@ -616,11 +569,6 @@ Resources:
                 Effect: Allow
                 Resource:
                   - '*'
-                  - !GetAtt 'ECSImageBuildLogGroup.Arn'
-                  - !Join
-                    - /
-                    - - !GetAtt 'ECSImageBuildLogGroup.Arn'
-                      - '*'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -677,11 +625,42 @@ Resources:
     Properties:
       LogGroupName: !Join
         - /
-        - - /fixengine
+        - - /aws/ssm
           - !Ref 'AWS::StackName'
           - ECSImageBuild
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
+  ECSImageBuildPolicy:
+    DependsOn:
+      - AutomationDocumentStarterRole
+      - ECSImageBuildDocument
+      - ECSImageBuildExecutionRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Effect: Allow
+            Resource:
+              - !GetAtt 'ECSImageBuildExecutionRole.Arn'
+          - Action:
+              - ssm:StartAutomationExecution
+            Effect: Allow
+            Resource:
+              - '*'
+              - !Join
+                - ''
+                - - 'arn:aws:ssm:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - :automation-definition/
+                  - !Ref 'ECSImageBuildDocument'
+                  - :1}
+      PolicyName: ECSImageBuildPolicy
+      Roles:
+        - !Ref 'AutomationDocumentStarterRole'
+    Type: AWS::IAM::Policy
   ECSImageBuildSecurityGroup:
     DependsOn: []
     Properties:
@@ -691,6 +670,7 @@ Resources:
   ECSImageBuildStarter:
     DependsOn:
       - ECRRepository
+      - ECSImageBuildPolicy
       - ECSImageBuildDocument
       - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
@@ -701,7 +681,7 @@ Resources:
           - Create
           - Update
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.23'
+        TemplateVersion: '1.24'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -710,8 +690,9 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT10M
+        Timeout: PT20M
     DependsOn:
+      - ECSImageBuildPolicy
       - ECSImageBuildDocument
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
@@ -802,7 +783,7 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !GetAtt 'ECRRepository.Arn'
-          PolicyName: primary-policy
+          PolicyName: PrimaryPolicy
     Type: AWS::IAM::Role
   FIXClientPrefixListUpdater:
     DependsOn:
@@ -1070,6 +1051,7 @@ Resources:
     DependsOn:
       - RDSCluster
       - RDSParameterGroup
+      - RDSClusterErrorLogGroup
     Properties:
       AllowMajorVersionUpgrade: 'false'
       AutoMinorVersionUpgrade: 'true'
@@ -1114,7 +1096,7 @@ Resources:
     Properties:
       LogGroupName: !Join
         - ''
-        - - /ecs/fargate/
+        - - /aws/ecs/fargate/
           - !Ref 'AWS::StackName'
       RetentionInDays: 30
     Type: AWS::Logs::LogGroup
@@ -1403,7 +1385,7 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !GetAtt 'GlobalAccelerator.AcceleratorArn'
-          PolicyName: primary-policy
+          PolicyName: PrimaryPolicy
     Type: AWS::IAM::Role
   GlobalAcceleratorListener:
     Condition: IsAcceptorStack
@@ -1567,10 +1549,11 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !Ref 'MSKCluster'
-          PolicyName: primary-policy
+          PolicyName: PrimaryPolicy
     Type: AWS::IAM::Role
   MSKClusterInitializationStarter:
     DependsOn:
+      - MSKClusterPrepPolicy
       - MSKInitializationDocument
       - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
@@ -1587,8 +1570,9 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT10M
+        Timeout: PT15M
     DependsOn:
+      - MSKClusterPrepPolicy
       - MSKInitializationDocument
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
@@ -1640,11 +1624,6 @@ Resources:
                 Effect: Allow
                 Resource:
                   - '*'
-                  - !GetAtt 'MSKClusterPrepLogGroup.Arn'
-                  - !Join
-                    - /
-                    - - !GetAtt 'MSKClusterPrepLogGroup.Arn'
-                      - '*'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -1693,11 +1672,42 @@ Resources:
     Properties:
       LogGroupName: !Join
         - /
-        - - /fixengine
+        - - /aws/ssm
           - !Ref 'AWS::StackName'
           - MSKPrepAutomation
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
+  MSKClusterPrepPolicy:
+    DependsOn:
+      - AutomationDocumentStarterRole
+      - MSKInitializationDocument
+      - MSKClusterPrepExecutionRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Effect: Allow
+            Resource:
+              - !GetAtt 'MSKClusterPrepExecutionRole.Arn'
+          - Action:
+              - ssm:StartAutomationExecution
+            Effect: Allow
+            Resource:
+              - '*'
+              - !Join
+                - ''
+                - - 'arn:aws:ssm:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - :automation-definition/
+                  - !Ref 'MSKInitializationDocument'
+                  - :1}
+      PolicyName: MSKClusterPrepPolicy
+      Roles:
+        - !Ref 'AutomationDocumentStarterRole'
+    Type: AWS::IAM::Policy
   MSKClusterPrepSecurityGroup:
     DependsOn: []
     Properties:
@@ -1790,7 +1800,7 @@ Resources:
             inputs:
               CloudWatchOutputConfig:
                 CloudWatchLogGroupName: !Ref 'MSKClusterPrepLogGroup'
-                CloudWatchOutputEnabled: 'true'
+                CloudWatchOutputEnabled: true
               DocumentName: AWS-RunShellScript
               InstanceIds:
                 - '{{LaunchInstance.InstanceIds}}'
@@ -2061,6 +2071,7 @@ Resources:
     DependsOn:
       - RDSCluster
       - RDSParameterGroup
+      - RDSClusterErrorLogGroup
     Properties:
       AllowMajorVersionUpgrade: 'false'
       AutoMinorVersionUpgrade: 'true'
@@ -2150,8 +2161,20 @@ Resources:
       TargetId: !Ref 'RDSCluster'
       TargetType: AWS::RDS::DBCluster
     Type: AWS::SecretsManager::SecretTargetAttachment
+  RDSClusterErrorLogGroup:
+    DependsOn:
+      - RDSCluster
+    Properties:
+      LogGroupName: !Join
+        - /
+        - - /aws/rds/cluster
+          - !Ref 'RDSCluster'
+          - error
+      RetentionInDays: 30
+    Type: AWS::Logs::LogGroup
   RDSClusterInitializationStarter:
     DependsOn:
+      - RDSClusterPrepPolicy
       - RDSInitializationDocument
       - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
@@ -2168,8 +2191,9 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Count: 1
-        Timeout: PT10M
+        Timeout: PT15M
     DependsOn:
+      - RDSClusterPrepPolicy
       - RDSInitializationDocument
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
@@ -2255,11 +2279,6 @@ Resources:
                 Effect: Allow
                 Resource:
                   - '*'
-                  - !GetAtt 'RDSClusterPrepLogGroup.Arn'
-                  - !Join
-                    - /
-                    - - !GetAtt 'RDSClusterPrepLogGroup.Arn'
-                      - '*'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -2310,11 +2329,42 @@ Resources:
     Properties:
       LogGroupName: !Join
         - /
-        - - /fixengine
+        - - /aws/ssm
           - !Ref 'AWS::StackName'
           - RDSPrepAutomation
       RetentionInDays: 7
     Type: AWS::Logs::LogGroup
+  RDSClusterPrepPolicy:
+    DependsOn:
+      - AutomationDocumentStarterRole
+      - RDSInitializationDocument
+      - RDSClusterPrepExecutionRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Effect: Allow
+            Resource:
+              - !GetAtt 'RDSClusterPrepExecutionRole.Arn'
+          - Action:
+              - ssm:StartAutomationExecution
+            Effect: Allow
+            Resource:
+              - '*'
+              - !Join
+                - ''
+                - - 'arn:aws:ssm:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - :automation-definition/
+                  - !Ref 'RDSInitializationDocument'
+                  - :1}
+      PolicyName: RDSClusterPrepPolicy
+      Roles:
+        - !Ref 'AutomationDocumentStarterRole'
+    Type: AWS::IAM::Policy
   RDSClusterSecretArnParam:
     Condition: ''
     Properties:
@@ -2416,7 +2466,7 @@ Resources:
             inputs:
               CloudWatchOutputConfig:
                 CloudWatchLogGroupName: !Ref 'RDSClusterPrepLogGroup'
-                CloudWatchOutputEnabled: 'true'
+                CloudWatchOutputEnabled: true
               DocumentName: AWS-RunShellScript
               InstanceIds:
                 - '{{LaunchInstance.InstanceIds}}'
@@ -2845,5 +2895,5 @@ Resources:
                 Resource:
                   - !GetAtt 'FIXClientVPCPrefixList.Arn'
                   - !GetAtt 'UserApplicationVPCPrefixList.Arn'
-          PolicyName: primary-policy
+          PolicyName: PrimaryPolicy
     Type: AWS::IAM::Role
