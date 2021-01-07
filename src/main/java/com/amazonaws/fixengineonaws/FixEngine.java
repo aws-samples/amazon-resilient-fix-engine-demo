@@ -1,12 +1,5 @@
 package com.amazonaws.fixengineonaws;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.ObjectOutputStream;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.sql.CallableStatement;
@@ -18,26 +11,17 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.MatchResult;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.ParseException;
 
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.globalaccelerator.AWSGlobalAccelerator;
@@ -48,24 +32,12 @@ import com.amazonaws.services.globalaccelerator.model.EndpointConfiguration;
 import com.amazonaws.services.globalaccelerator.model.EndpointDescription;
 import com.amazonaws.services.globalaccelerator.model.EndpointGroup;
 import com.amazonaws.services.globalaccelerator.model.UpdateEndpointGroupRequest;
-import com.amazonaws.services.secretsmanager.AWSSecretsManager;
-import com.amazonaws.services.secretsmanager.AWSSecretsManagerClientBuilder;
-import com.amazonaws.services.secretsmanager.model.GetSecretValueRequest;
-import com.amazonaws.services.secretsmanager.model.GetSecretValueResult;
-import com.amazonaws.services.simplesystemsmanagement.AWSSimpleSystemsManagement;
-import com.amazonaws.services.simplesystemsmanagement.AWSSimpleSystemsManagementClientBuilder;
-import com.amazonaws.services.simplesystemsmanagement.model.GetParameterRequest;
-import com.amazonaws.services.simplesystemsmanagement.model.GetParameterResult;
-import com.amazonaws.services.simplesystemsmanagement.model.GetParametersByPathRequest;
-import com.amazonaws.services.simplesystemsmanagement.model.GetParametersByPathResult;
-import com.amazonaws.services.simplesystemsmanagement.model.Parameter;
 
 import quickfix.Acceptor;
 import quickfix.Application;
 import quickfix.ConfigError;
 import quickfix.DefaultMessageFactory;
 import quickfix.DoNotSend;
-import quickfix.FieldConvertError;
 import quickfix.FieldNotFound;
 import quickfix.FileStoreFactory;
 import quickfix.IncorrectDataFormat;
@@ -82,85 +54,171 @@ import quickfix.ScreenLogFactory;
 import quickfix.Session;
 import quickfix.SessionID;
 import quickfix.SessionNotFound;
-import quickfix.SessionSettings;
 import quickfix.SocketAcceptor;
 import quickfix.SocketInitiator;
 import quickfix.UnsupportedMessageType;
 
 public class FixEngine implements Application {
-    private static Logger LOGGER = Logger.getLogger(FixEngine.class.getName());
-    private static String MY_IP = getMyIp();
-    private static boolean IM_AM_THE_ACTIVE_ENGINE = false;
-    private static KafkaProducer<String, String> KAFKA_PRODUCER = null;
-    private static KafkaConsumer<String, Object> KAFKA_CONSUMER = null;
-    private static String KAFKA_INBOUND_TOPIC_NAME;
-    private static long messageCounter = 0;
-    private static Acceptor FIX_SERVER = null;
-    private static Initiator FIX_CLIENT = null;
-    private static Session FIX_SESSION = null;
-    private static SessionID FIX_SESSION_ID = null;
-    private static AWSSimpleSystemsManagement SSM_CLIENT = null;
+    private Logger LOGGER = Logger.getLogger(FixEngine.class.getName());
+    private String MY_IP = "???";
+    private boolean IM_AM_THE_ACTIVE_ENGINE = false;
+    private KafkaProducer<String, String> KAFKA_PRODUCER = null;
+    private KafkaConsumer<String, Object> KAFKA_CONSUMER = null;
+    private String KAFKA_INBOUND_TOPIC_NAME;
+    private long messageCounter = 0;
+    private Acceptor FIX_SERVER = null;
+    private Initiator FIX_CLIENT = null;
+    private Session FIX_SESSION = null;
+    private SessionID FIX_SESSION_ID = null;
 
-    private static final int LEADER_STATUS_STILL_LEADER = 1;
-    private static final int LEADER_STATUS_STILL_NOT_LEADER = 0;
-    private static final int LEADER_STATUS_JUST_BECAME_LEADER = -1;
+    private final int LEADER_STATUS_STILL_LEADER = 1;
+    private final int LEADER_STATUS_STILL_NOT_LEADER = 0;
+    private final int LEADER_STATUS_JUST_BECAME_LEADER = -1;
 
+    private int HEARTBEAT_SLEEP_INTERVAL = 0;
+    private boolean DROP_FIX_MESSAGES = false;
+    private boolean DROP_KAFKA_MESSAGES = false;
+    
+    private FixEngineConfig fixEngineConfig;
+
+    private long lastStatsLogTime = 0;
+    private long logStatsEvery = 60000;
+    private long totalInboundMessageProcessingTime = 0;
+    private long totalInboundKafkaProcessingTime = 0;
+    private long totalOutboundMessageProcessingTime = 0;
+    private long totalOutboundFixProcessingTime = 0;
+
+	/**
+	 * Constructor creates a LOGGER and a FixEngineConfig using the specified configfile location, in preparation for calling run()
+	 * @param configfile
+	 * @throws ConfigError 
+	 */
+	public FixEngine(String configfile) throws ConfigError {
+		super();
+        LOGGER.setLevel(Level.INFO);
+        // LOGGER.setLevel(Level.FINE);
+	    MY_IP = getMyIp();
+	    LOGGER.info(MY_IP+"CONSTRUCTOR: INITIALIZING CONFIG");
+	    try {
+	    	fixEngineConfig = new FixEngineConfig(configfile, LOGGER);
+		} catch (ConfigError e) {
+		    LOGGER.severe(MY_IP+"CONSTRUCTOR: ERROR INITIALIZING CONFIG DUE TO ERROR: " + e);
+			e.printStackTrace();
+			throw e;
+		}
+	}
+
+	/**
+	 * Calls heartbeatMessageProcessingLoop and catches/logs any errors
+	 */
+	public void run() {
+	    LOGGER.info(MY_IP+"CONSTRUCTOR: STARTING HEARTBEAT");
+		try {
+			heartbeatMessageProcessingLoop(fixEngineConfig);
+		} catch (ConfigError e) {
+			LOGGER.severe(MY_IP+"CONSTRUCTOR: ERROR IN HEARTBEAT DUE TO CONFIG ERROR: " + e);
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * QuickFixJ Application interface hook - called when FIX session object is first created  
+	 */
     @Override
     public void onCreate(SessionID sessionID) {
         LOGGER.fine(MY_IP+"OnCreate");
     }
 
+	/**
+	 * QuickFixJ Application interface hook - called when FIX session is established
+	 */
     @Override
     public void onLogon(SessionID sessionID) {
         LOGGER.info(MY_IP+"OnLogon session ID: " + sessionID);
         FIX_SESSION_ID = sessionID;
     }
 
+	/**
+	 * QuickFixJ Application interface hook - called when FIX session is logged out
+	 */
     @Override
     public void onLogout(SessionID sessionID) {
         LOGGER.info(MY_IP+"OnLogout session ID: " + sessionID);
         FIX_SESSION_ID = null;
     }
 
+	/**
+	 * QuickFixJ Application interface hook
+	 */
     @Override
     public void toAdmin(Message message, SessionID sessionID) {
     }
 
+	/**
+	 * QuickFixJ Application interface hook
+	 */
     @Override
     public void fromAdmin(Message message, SessionID sessionID) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {
     }
 
+	/**
+	 * QuickFixJ Application interface hook - called when a message is being sent by this process out via the FIX connection
+	 */
     @Override
     public void toApp(Message message, SessionID sessionID) throws DoNotSend {
         LOGGER.info(MY_IP+"%%%%%%%% TOAPP: " + message);
     }
 
+	/**
+	 * QuickFixJ Application interface hook - called when a message is received by this process from the FIX connection
+	 * decodes the message and forwards it to Kafka queue 
+	 */
     @Override
     public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
         LOGGER.info(MY_IP+"%%%%%%%% FROMAPP: " + message);
+        long timeInFromAppStart = System.currentTimeMillis();
         
-        if (!IM_AM_THE_ACTIVE_ENGINE) {
-            LOGGER.fine(MY_IP+"%%%%%%%% FROMAPP: NOT ACTIVE ENGINE, DO Nothing" );
+        if(DROP_FIX_MESSAGES) {
+            LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: DROPPING MESSAGE INSTEAD OF SENDING IT!");        	
+        } else {
+	        if (!IM_AM_THE_ACTIVE_ENGINE) {
+	            LOGGER.fine(MY_IP+"%%%%%%%% FROMAPP: NOT ACTIVE ENGINE, DO Nothing" );
+	        }
+	
+	        LOGGER.fine(MY_IP+"********************** counter: " + messageCounter++);
+	
+	        String parsedOrdStr = message.toString();
+	        LOGGER.fine(MY_IP+"%%%%%%%% FROMAPP: ***SERVER FIX ENGINE*** PARSED ORDER FIX STRING: " + parsedOrdStr);
+	
+	    //  Object[] array = getKafkaProducer();
+	    //     KafkaProducer<String, String> producer = (KafkaProducer) array[0];
+	    //     String topicName = (String )array[1];
+	
+	        try {
+	            long timeInFromAppKafkaSendStart = System.currentTimeMillis();
+            	if(timeInFromAppKafkaSendStart - lastStatsLogTime > logStatsEvery) {
+            		LOGGER.info(MY_IP+"@@@@@@@@@@ INBOUND TIMING STATISTICS: RESETTING TOTALS SINCE IT'S BEEN OVER A MINUTE SINCE THE LAST MESSAGE");
+            		totalInboundKafkaProcessingTime = 0;
+            		totalInboundMessageProcessingTime = 0;
+            	}
+            	KAFKA_PRODUCER.send(new ProducerRecord<String, String>(KAFKA_INBOUND_TOPIC_NAME, parsedOrdStr)).get();
+	            long timeInFromAppKafkaSendEnd = System.currentTimeMillis();
+
+                totalInboundKafkaProcessingTime += timeInFromAppKafkaSendEnd - timeInFromAppKafkaSendStart;
+                totalInboundMessageProcessingTime += timeInFromAppKafkaSendEnd - timeInFromAppStart;
+                LOGGER.info(MY_IP+"@@@@@@@@@@ INBOUND TIMING STATISTICS:\ttotalInboundKafkaProcessingTime:\t" + totalInboundKafkaProcessingTime + "\ttotalInboundMessageProcessingTime:\t" + totalInboundMessageProcessingTime);
+	        } catch (Exception e) {
+	            LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: Exception:" + e);
+	            e.printStackTrace();
+	        }       
         }
-
-        LOGGER.fine(MY_IP+"********************** counter: " + messageCounter++);
-
-        String parsedOrdStr = message.toString();
-        LOGGER.fine(MY_IP+"%%%%%%%% FROMAPP: ***SERVER FIX ENGINE*** PARSED ORDER FIX STRING: " + parsedOrdStr);
-
-    //  Object[] array = getKafkaProducer();
-    //     KafkaProducer<String, String> producer = (KafkaProducer) array[0];
-    //     String topicName = (String )array[1];
-
-        try {
-            KAFKA_PRODUCER.send(new ProducerRecord<String, String>(KAFKA_INBOUND_TOPIC_NAME, parsedOrdStr)).get();
-        } catch (Exception e) {
-            LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: Exception:" + e);
-            e.printStackTrace();
-        }       
     }
 
-    public static String getMyIp() {
+    /**
+     * Returns the IP address of the host running this code as a String
+     * @return
+     */
+    private String getMyIp() {
         try {
             InetAddress inet = InetAddress.getLocalHost();
             return inet.getHostAddress();
@@ -171,14 +229,22 @@ public class FixEngine implements Application {
         }
     }
 
-    public static void setLogLevel(boolean enableFineGrainedLogging) {
+    /**
+     * Sets the LOGGER's log level to INFO (for regular operation) if the parameter is false or FINE (for debugging) if the parameter is true 
+     * @param enableFineGrainedLogging
+     */
+    public void setLogLevel(boolean enableFineGrainedLogging) {
         Level logLevel = enableFineGrainedLogging ? Level.FINE : Level.INFO;
         LOGGER.setLevel(logLevel);
         LOGGER.info(MY_IP+"MAIN: SET LOG LEVEL TO " + logLevel);
         // LOGGER.fine(MY_IP+"MAIN: A FINE LOG TEST");
     }
 
-    private static void loadJdbcClass(String jdbcDriver) {
+    /**
+     * Tries to load the supplied class by name, prints an exception if it's unable to. 
+     * @param jdbcDriver
+     */
+    private void loadJdbcClass(String jdbcDriver) {
         try {
             Class.forName(jdbcDriver); 
         } catch (ClassNotFoundException e) {
@@ -187,106 +253,16 @@ public class FixEngine implements Application {
             return;
         }
         LOGGER.fine(MY_IP+"LOADED JDBC DRIVER:" + jdbcDriver);
-    }   
-
-    public static String getSsmParameterPath() {
-	    LOGGER.info(MY_IP+"**********GET SSM PARAMETER PATH starting");
-		String stackNameEnvVar = "APPLICATION_STACK_NAME";
-	    String stackName = System.getenv(stackNameEnvVar);
-	    LOGGER.fine(MY_IP+"GET SSM PARAMETER PATH got stack name env var  : [" + stackNameEnvVar + "] value [" + stackName + "]");
-	    if(stackName == null) {
-	        LOGGER.severe(MY_IP+"GET SSM PARAMETER unable to find System Environment Variable (that should contain the CloudFormation stack name that created all SSM parameters) called: " + stackNameEnvVar);
-	        return null;
-	    }
-	    String path = "/fixengine/" + stackName;
-	    return path;
-    }
-    
-    public static String getSsmParameter(String parameterPath, String parameterName) throws ConfigError {
-	    LOGGER.info(MY_IP+"**********GET SSM PARAMETER looking up " + parameterPath + "/" + parameterName + " using " + SSM_CLIENT);
-    	if(System.getProperty("os.name").contains("Windows")) {
-    		LOGGER.info(MY_IP+"GET SSM PARAMETER PATH returning dummy value because we're running on Windows not Unix");
-//    		return new HashMap<String, String>();
-    		if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
-    			return "arn:aws:elasticloadbalancing:us-east-1:015331511911:loadbalancer/net/FixEn-Prima-JV82REH1OXV5/44c96ca1cc0dceec";
-    		}
-    		HashMap<String, String> ret = new HashMap<String, String>();
-    		ret.put("SenderCompID","client");
-    		ret.put("ConnectionType","initiator");
-    		ret.put("PrimaryMSKEndpoint","b-1.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
-    		ret.put("KafkaConnTLS","false");
-    		ret.put("TargetCompID","server");
-    		ret.put("KafkaPort","9092");
-    		ret.put("DebugLogging","true");
-    		ret.put("FIXServerPort","9877");
-    		ret.put("FailoverMSKEndpoint","b-2.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
-    		ret.put("FIXServerDNSName","a98128cf808f6358e.awsglobalaccelerator.com");
-    		ret.put("ApplicationID","client");
-    		ret.put("RDSClusterSecretArn","arn:aws:secretsmanager:us-east-1:015331511911:secret:RDSClusterAdminSecret-L9C42cRuF7p2-L7HsvC");
-    		ret.put("RDSClusterNonAdminSecretArn","arn:aws:secretsmanager:us-east-1:015331511911:secret:RDSClusterNonAdminSecret-waqyosb9knZt-adX48c");
-    		ret.put("GlobalAcceleratorEndpointGroupArn", "arn:aws:elasticloadbalancing:us-east-1:015331511911:loadbalancer/net/FixEn-Failo-BM0E1KC5AQ2K/4df267784903750a");
-    		return(ret.get(parameterName));
-    	}
-
-    	if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
-		    String GAEndpointArn = System.getenv(parameterName);
-		    LOGGER.fine(MY_IP+"GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]");
-		    if(GAEndpointArn == null) {
-		        LOGGER.severe(MY_IP+"GET SSM PARAMETER unable to find System Environment Variable (that should contain the CloudFormation stack name that created all SSM parameters) called: " + parameterName);
-		    }
-		    return GAEndpointArn;
-    	}
-    	
-    	if(SSM_CLIENT == null) {
-    		SSM_CLIENT = AWSSimpleSystemsManagementClientBuilder.standard().build();
-    		if(SSM_CLIENT == null) {
-    			LOGGER.severe(MY_IP+"GET SSM PARAMETER unable to create an AWSSimpleSystemsManagementClientBuilder! Check IAM privileges to see if your process has enough access to read params!");
-    			throw new ConfigError(MY_IP+"GET SSM PARAMETER unable to create an AWSSimpleSystemsManagementClientBuilder! Check IAM privileges to see if your process has enough access to read params!");
-    		}
-    	}
-        String key = parameterPath + "/" + parameterName;
-        try {
-            GetParameterRequest parametersRequest = new GetParameterRequest().withName(key).withWithDecryption(false);
-            GetParameterResult parameterResult = SSM_CLIENT.getParameter(parametersRequest);
-            String value = parameterResult.getParameter().getValue();
-            LOGGER.fine(MY_IP+"GET SSM PARAMETER got key : [" + key + "] value [" + value + "]");
-            return value;
-        } catch (Exception e) {
-            LOGGER.fine(MY_IP+"GET SSM PARAMETER unable to get key : [" + key + "] : " + e);
-            throw e;
-        }
     }
 
-    private static void addSqlDbConnectionCoordinatesToSettings(String secretArn, SessionSettings sessionSettings) {        
-        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using ARN: " + secretArn);
-//      AWSSecretsManager client  = System.getProperty("os.name").contains("Windows") ? AWSSecretsManagerClientBuilder.standard().withRegion(Regions.US_EAST_1).build() : AWSSecretsManagerClientBuilder.standard().build();
-        AWSSecretsManager client  = AWSSecretsManagerClientBuilder.standard().build();
-        GetSecretValueRequest getSecretValueRequest = new GetSecretValueRequest().withSecretId(secretArn);
-        GetSecretValueResult getSecretValueResult = null;
-
-        try {
-            getSecretValueResult = client.getSecretValue(getSecretValueRequest);
-        } catch (Exception e) {
-            LOGGER.severe(MY_IP+"****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e);
-            e.printStackTrace();
-        }
-
-        String secret = getSecretValueResult.getSecretString();
-//        System.out.println("SECRET JSON: " + secret);
-        JSONParser parser = new JSONParser();
-        try {
-            JSONObject parseResult = (JSONObject)parser.parse(secret);
-            sessionSettings.setString("JdbcUser", parseResult.get("username").toString());
-            sessionSettings.setString("JdbcPassword", parseResult.get("password").toString());
-            sessionSettings.setString("JdbcURL", "jdbc:mysql://" + parseResult.get("host").toString() + ":" + parseResult.get("port").toString() + "/quickfix");            
-        } catch (ParseException e) {
-            LOGGER.severe(MY_IP+"GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e);
-            e.printStackTrace();
-        }
-
-    }
-    
-    private static Connection getSqlDbConnection(String jdbcUrl, String jdbcUser, String jdbcPass) {        
+    /**
+     * Creates and returns a JDBC connection
+     * @param jdbcUrl
+     * @param jdbcUser
+     * @param jdbcPass
+     * @return
+     */
+    private Connection getSqlDbConnection(String jdbcUrl, String jdbcUser, String jdbcPass) {        
         LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET ");
         
         // System.out.println("CONNECTING TO URL " + jdbcUrl + " WITH USER " + jdbcUser + " AND PASS " + jdbcPass);
@@ -305,80 +281,12 @@ public class FixEngine implements Application {
         return null;    
     }
 
-    private static SessionSettings overrideConfigFromSsmParameters(SessionSettings sessionSettings) throws ConfigError, IOException {
-    	LOGGER.info(MY_IP+"****OVERRIDE CONFIG FROM SSM PARAMETERS starting");
-        String ssmParameterPath = getSsmParameterPath();
-    	ArrayList<Properties> allProperties = new ArrayList<Properties>();
-    	allProperties.add(sessionSettings.getDefaultProperties());
-        for (Iterator<SessionID> sections = sessionSettings.sectionIterator(); sections.hasNext(); ) {
-            SessionID section = sections.next();
-	        try {
-            	allProperties.add(sessionSettings.getSessionProperties(section));
-	        } catch (ConfigError e) {
-	        	LOGGER.severe(MY_IP+"OVERRIDE PARAMETERS Unable to process section [" + section + "]");
-	        	e.printStackTrace();
-	        }
-        }
-//        LOGGER.info(MY_IP+"OVERRIDE CONFIG FROM SSM PARAMETERS got session params: " + allProperties);
-        for (int i = 0; i < allProperties.size(); i++) {
-        	Properties sessionProperties = allProperties.get(i);
-            LOGGER.info(MY_IP+"PROPS: " + sessionProperties);
-            for (Iterator sessionPropertyIter = sessionProperties.entrySet().iterator(); sessionPropertyIter.hasNext(); ) {
-            	Map.Entry<String, String> sessionProperty = (Map.Entry<String, String>)sessionPropertyIter.next();
-//            	String propertyKey = (String)sessionProperty.getKey();
-            	String propertyVal = (String)sessionProperty.getValue();
-//                LOGGER.info(MY_IP+"OVERRIDE PARAMETERS in FIX_SESSION_SETTINGS looking at property [" + propertyKey + "] with value [" + propertyVal + "]");
-
-            	Matcher m = Pattern.compile("<(.+?)>").matcher(propertyVal);
-            	while (m.find()) {
-            		String token = m.group();
-            		String ssmParameterName = token.replace("<", "").replace(">", "");
-                	String ssmParamVal = getSsmParameter(ssmParameterPath, ssmParameterName);
-                	String newValue = propertyVal.replace(token,ssmParamVal);
-                	System.out.println("OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]");
-                	propertyVal = newValue;
-                	sessionProperty.setValue(newValue);            		
-            	}
-            }
-        }
-        
-        // This is a wourkaround for a bug in sessionSettings where simply setting properties in the "session" section 
-        // gets reflected in the underlying Hashtables and toString() but not in the date it exposes to the Fix SocketAcceptor/SocketInitiator constructor
-        // resulting in token strings like "<TargetCompID>" being used by the resulting FIX engine instead of the overridden values
-        ByteArrayOutputStream oos = new ByteArrayOutputStream();
-        sessionSettings.toStream(oos);
-        oos.flush();
-        oos.close();
-        InputStream is = new ByteArrayInputStream(oos.toByteArray());
-        SessionSettings newSessionSettings = new SessionSettings(is);
-//        LOGGER.info(MY_IP+"INITIALIZE PARAMETERS: rewrote new SessionSettings after overriding: " + sessionSettings);
-        return newSessionSettings;
-    }
-
-    public static SessionSettings initializeParameters(String configfile) throws ConfigError, IOException {
-    	LOGGER.info(MY_IP+"****INITIALIZE PARAMETERS starting");    	
-    	SessionSettings sessionSettings = null;
-    	try {
-            sessionSettings = new SessionSettings(configfile);
-        } catch (ConfigError e) {
-            LOGGER.info(MY_IP+"INITIALIZE PARAMETERS: Unable to create new SessionSettings from config file " + configfile);
-            e.printStackTrace();
-            throw e;
-        }
-
-        setLogLevel(true);
-
-        sessionSettings = overrideConfigFromSsmParameters(sessionSettings);
-        
-        if ("<DebugLogging>".equals(sessionSettings.getString("DebugLogging"))) {
-        	sessionSettings.setString("DebugLogging","false");
-        }        
-    	LOGGER.info(MY_IP+"INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings);    	
-//        checkConfigHealthy(configfile);
-        return sessionSettings;
-    }
-
-    private static KafkaProducer<String, String> startKafkaProducer(String kafkaBrokerString) {
+	/**
+	 * Creates a KafkaProducer connection to the specified broker
+	 * @param kafkaBrokerString
+	 * @return
+	 */
+    private KafkaProducer<String, String> startKafkaProducer(String kafkaBrokerString) {
 		LOGGER.info(MY_IP+"****START KAFKA OUTBOUND PRODUCER START*****");
         Properties properties = new Properties();
         properties.setProperty("bootstrap.servers", kafkaBrokerString);
@@ -388,7 +296,12 @@ public class FixEngine implements Application {
         return kafkaProducer;
     }
 
-    private static KafkaConsumer<String, Object> startKafkaConsumer(String kafkaBrokerString, String consumerGroupId, String topicName) {
+	/**
+	 * Creates a KafkaProducer connection to the specified broker, group and topic
+	 * @param kafkaBrokerString
+	 * @return
+	 */
+    private KafkaConsumer<String, Object> startKafkaConsumer(String kafkaBrokerString, String consumerGroupId, String topicName) {
         LOGGER.info(MY_IP+"****KAFKA INBOUND CONSUMER START*****");
         Properties properties = new Properties();
         properties.setProperty("bootstrap.servers", kafkaBrokerString);
@@ -403,33 +316,53 @@ public class FixEngine implements Application {
         return kafkaConsumer;
     }
 
-    private static void processOneInboundKafkaMessage(ConsumerRecord<String, Object> kafkaMessage) {
+    /**
+     * Parses FIX string to a QuickFixJ Message object
+     * @param fixString
+     * @return
+     */
+    public Message parseOrder(String fixString) {
+	    try {
+		    Message parsedOrd = quickfix.MessageUtils.parse(FIX_SESSION, fixString);
+		    LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: PARSED   MESSAGE: " + parsedOrd);
+//		    LOGGER.fine(MY_IP+"****PROCESS KAFKA MSGS: PARSED    HEADER: " + parsedOrd.getHeader());
+	        return parsedOrd;
+	    } catch (InvalidMessage e) {
+	    	LOGGER.severe(MY_IP+"ERROR PARSING MESSAGE: " + fixString);
+	        e.printStackTrace();
+	        return null;
+	    }
+    }
+    
+    /**
+     * Parses FIX-formatted message String from Kafka ConsumerRecord parameter into a QuickFixJ Message object, then sends that object out via the FIX connection 
+     * @param kafkaMessage
+     */
+    private void processOneInboundKafkaMessage(ConsumerRecord<String, Object> kafkaMessage) {
         LOGGER.info(MY_IP+"****PROCESS ONE KAFKA MESSAGE: processing " + kafkaMessage.value().toString());
-        String ordStr = kafkaMessage.value().toString();
-        Message parsedOrd = null;
-        try {
-            parsedOrd = quickfix.MessageUtils.parse(FIX_SESSION, ordStr);
-        } catch (InvalidMessage e) {
-        	LOGGER.severe(MY_IP+"ERROR PARSING MESSAGE: " + ordStr);
-            e.printStackTrace();
+        if(DROP_KAFKA_MESSAGES) {
+            LOGGER.severe(MY_IP+"****PROCESS ONE KAFKA MESSAGE: DROPPING MESSAGE INSTEAD OF SENDING IT!");        	
+        } else {
+	        Message parsedOrd = parseOrder(kafkaMessage.value().toString());
+	        //[CLIENT FIX ENGINE] SEND ORDER FIX TO SERVER FIX ENGINE
+	        try {
+	        	LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: SENDING MESSAGE TO FIX: " + parsedOrd);
+	            Session.sendToTarget(parsedOrd, FIX_SESSION_ID);
+	        } catch (SessionNotFound se) {
+	        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: SessionNotFound: " + se);
+	            se.printStackTrace();
+	        } catch (Exception e) {
+	        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: Exception: " + e);
+	            e.printStackTrace();
+	        }
         }
-        LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: PARSED   MESSAGE: " + parsedOrd);
-        LOGGER.fine(MY_IP+"****PROCESS KAFKA MSGS: PARSED    HEADER: " + parsedOrd.getHeader());
-                    
-        //[CLIENT FIX ENGINE] SEND ORDER FIX TO SERVER FIX ENGINE
-        try {
-        	LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: SENDING MESSAGE TO FIX: " + parsedOrd);	        	        	
-            Session.sendToTarget(parsedOrd, FIX_SESSION_ID);
-        } catch (SessionNotFound se) {
-        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: SessionNotFound: " + se);
-            se.printStackTrace();
-        } catch (Exception e) {
-        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: Exception: " + e);
-            e.printStackTrace();
-        }        
     }
 
-    private static void processInboundKafkaMsgs(KafkaConsumer<String, Object> kafkaConsumer) {
+    /**\
+     * Polls Kafka queue for new messages and calls processOneInboundKafkaMessage on each to send it out via the FIX connection 
+     * @param kafkaConsumer
+     */
+    private void processInboundKafkaMsgs(KafkaConsumer<String, Object> kafkaConsumer) {
         LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: ************* after calling getKafkaConsumer ");
         int count = 0;
         if(IM_AM_THE_ACTIVE_ENGINE && FIX_SESSION_ID != null) {
@@ -443,7 +376,15 @@ public class FixEngine implements Application {
             // }
             //Test COde 
             // Poll for records
+        	
             ConsumerRecords<String, Object> records = kafkaConsumer.poll(Duration.ofMillis(50));
+            long timeOutKafkaPollEnd = System.currentTimeMillis();
+        	if(timeOutKafkaPollEnd - lastStatsLogTime > logStatsEvery) {
+        		LOGGER.info(MY_IP+"@@@@@@@@@@ OUTBOUND TIMING STATISTICS: RESETTING TOTALS SINCE IT'S BEEN OVER A MINUTE SINCE THE LAST MESSAGE");
+        		totalOutboundFixProcessingTime = 0;
+        		totalOutboundMessageProcessingTime= 0;
+        	}
+
             //LOGGER.fine(MY_IP+" After polling consumer records.count() : " + records.count());
             // Did we get any?
             if (records.count() == 0) {
@@ -457,13 +398,24 @@ public class FixEngine implements Application {
                     // Display record and count
                     count += 1;
                     LOGGER.fine(MY_IP+ count + ": " + record.value());
+                    long timeOutKafkaMessageProcessStart = System.currentTimeMillis();
                     processOneInboundKafkaMessage(record);
+                    long timeOutKafkaMessageProcessEnd = System.currentTimeMillis();
+
+                    totalOutboundFixProcessingTime += timeOutKafkaMessageProcessEnd - timeOutKafkaMessageProcessStart;
+                    totalOutboundMessageProcessingTime += timeOutKafkaMessageProcessEnd - timeOutKafkaPollEnd;
+                    LOGGER.info(MY_IP+"@@@@@@@@@@ OUTBOUND TIMING STATISTICS:\tmessageCount:\t" + count + "\ttotalOutboundFixProcessingTime:\t" + totalOutboundFixProcessingTime + "\ttotalOutboundMessageProcessingTime:\t" + totalOutboundMessageProcessingTime);                
                 }
             }
-        } //while loop
+        }
     }
 
-	private static void updateGAEndpoints(String myGaEndpointGroupArn, String myGaEndpointArn) {
+    /**
+     * Re-points Global Accelerator endpoint (specified by myGaEndpointGroupArn) to the endpoint that's running this code (specified by myGaEndpointArn)
+     * @param myGaEndpointGroupArn
+     * @param myGaEndpointArn
+     */
+	private void updateGAEndpoints(String myGaEndpointGroupArn, String myGaEndpointArn) {
         LOGGER.info(MY_IP+"UPDATE GA ENDPOINT starting for myGaEndpointGroupArn: "+ myGaEndpointGroupArn + " and myGaEndpointArn: "+ myGaEndpointArn);
         String activeEndpoint = null;
         String passiveEndpoint = null;
@@ -506,7 +458,15 @@ public class FixEngine implements Application {
         amazonGlobalAcceleratorClient.updateEndpointGroup(new UpdateEndpointGroupRequest().withEndpointGroupArn(myGaEndpointGroupArn).withEndpointConfigurations(endpointConfiguration));
     }
 
-	private static CallableStatement getHeartbeatSprocStmt(String jdbcDriver, String jdbcUrl, String jdbcUser, String jdbcPass) {
+	/**
+	 * Constructs a SQL Connection and uses it to construct a prepared statemetn to call EngineStatus stored procedure used by getLeaderStatus
+	 * @param jdbcDriver
+	 * @param jdbcUrl
+	 * @param jdbcUser
+	 * @param jdbcPass
+	 * @return
+	 */
+	private CallableStatement getHeartbeatSprocStmt(String jdbcDriver, String jdbcUrl, String jdbcUser, String jdbcPass) {
         LOGGER.fine(MY_IP+"*********************GET HEARTBEAT PROC STATEMENT*********************");              
         String query = "{CALL EngineStatus(?, ?, ?, ?, ?, ?)}";
         loadJdbcClass(jdbcDriver);
@@ -530,9 +490,17 @@ public class FixEngine implements Application {
         return null;
     }
 
-    private static synchronized int getLeaderStatus(CallableStatement heartbeatSprocStmt, boolean iAmTheLeader, boolean useJdbcHeartbeat) {
+	/**
+	 * Calls heartbeatSprocStmt to determine if the curren engine is still teh leader, still not the leader, or just became the leader.
+	 * @param heartbeatSprocStmt
+	 * @param iAmTheLeader
+	 * @param useJdbcHeartbeat
+	 * @return one of the three LEADER_STATUS_* codes
+	 * @throws SQLException
+	 */
+    private int getLeaderStatus(CallableStatement heartbeatSprocStmt, boolean iAmTheLeader, boolean useJdbcHeartbeat) throws SQLException {
 //      LOGGER.fine(MY_IP+"*********************HEARTBEAT********************");  
-        int leaderStatus = 0;
+        int leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
         String lastIpAdd = "";
         Timestamp lastTimestamp = null;
         Timestamp timeNow = null;
@@ -540,9 +508,9 @@ public class FixEngine implements Application {
 //      LOGGER.fine(MY_IP+"****HEARTBEAT: USE_JDBC: " + USE_JDBC + "; heartbeatSprocStmt = " + heartbeatSprocStmt);
         if(!useJdbcHeartbeat) {
             if(iAmTheLeader) {
-                leaderStatus = 1;
+                leaderStatus =  LEADER_STATUS_STILL_LEADER;
             } else {
-                leaderStatus = -1;
+                leaderStatus = LEADER_STATUS_JUST_BECAME_LEADER;
             }
             LOGGER.info(MY_IP+"****HEARTBEAT: NO SQL CONNECTION. DEFAULT LEADER STATUS: " + leaderStatus);
         } else {    
@@ -557,27 +525,32 @@ public class FixEngine implements Application {
             } catch (SQLException e) {
                 LOGGER.severe(MY_IP+"HEARTBEAT: Exception executing SQL SPROC: " + e);
                 e.printStackTrace();
-                return LEADER_STATUS_STILL_NOT_LEADER;
+                throw e;
             }
         }
 		return leaderStatus;
     }
 
-    private static void startFixServer(SessionSettings sessionSettings) throws ConfigError {
+    /**
+     * Creates QuickFix SocketAcceptor class, calls start() on it and assigns it to global variable FIX_SERVER
+     * Uses the FIX_SERVER to look up the FIX session and assigns the result to global variable FIX_SESSION
+     * @param config
+     * @throws ConfigError
+     */
+    private void startFixServer(FixEngineConfig config) throws ConfigError {
 	    LOGGER.info(MY_IP+"****STARTING FIX SERVER APPLICATION");           
 	    if(FIX_SERVER!=null) {
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_SERVER object already exists!");
 	    } else {
-	        Application application = new FixEngine();
 	        MessageStoreFactory messageStoreFactory = null;
-	        if("true".equals(sessionSettings.getString("UseJdbcMessageStore"))) { 
-	        	messageStoreFactory = new JdbcStoreFactory(sessionSettings);
+	        if("true".equals(config.getSessionSetting("UseJdbcMessageStore"))) {
+	        	messageStoreFactory = new JdbcStoreFactory(config.getSessionSettings());
 	        } else {
-	        	messageStoreFactory = new FileStoreFactory(sessionSettings);
+	        	messageStoreFactory = new FileStoreFactory(config.getSessionSettings());
 	        }
 	        LogFactory logFactory = new ScreenLogFactory(true, true, true);
 	        MessageFactory messageFactory = new DefaultMessageFactory();
-	    	FIX_SERVER = new SocketAcceptor(application, messageStoreFactory, sessionSettings, logFactory, messageFactory);
+	    	FIX_SERVER = new SocketAcceptor(this, messageStoreFactory, config.getSessionSettings(), logFactory, messageFactory);
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_SERVER object created: " + FIX_SERVER);	    	
 	    }
 
@@ -588,25 +561,29 @@ public class FixEngine implements Application {
 	    	FIX_SESSION = Session.lookupSession(FIX_SERVER.getSessions().get(0));
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_INBOUND_SESSION object created: " + FIX_SESSION);
 	    }
-    }
+    }	
 
-    private static void startFixClient(SessionSettings sessionSettings) throws ConfigError {
+    /**
+     * Creates QuickFix SocketInitiator class, calls start() on it and assigns it to global variable FIX_CLIENT
+     * Uses the FIX_CLIENT to look up the FIX session and assigns the result to global variable FIX_SESSION
+     * @param config
+     * @throws ConfigError
+     */
+    private void startFixClient(FixEngineConfig config) throws ConfigError {
 	    LOGGER.info(MY_IP+"****STARTING FIX CLIENT APPLICATION");
 	    if(FIX_CLIENT!=null) {
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_CLIENT object already exists!");
 	    } else {
-	        Application applicationClient = new FixEngine();
-	//                      MessageStoreFactory messageStoreFactoryClient = new FileStoreFactory(FIX_SESSION_SETTINGS);
 	        MessageStoreFactory messageStoreFactoryClient = null;
-	        if("true".equals(sessionSettings.getString("UseJdbcMessageStore"))) { 
-	            messageStoreFactoryClient = new JdbcStoreFactory(sessionSettings);
+	        if("true".equals(config.getSessionSetting("UseJdbcMessageStore"))) { 
+	            messageStoreFactoryClient = new JdbcStoreFactory(config.getSessionSettings());
 	        } else {
-	            messageStoreFactoryClient = new FileStoreFactory(sessionSettings);
+	            messageStoreFactoryClient = new FileStoreFactory(config.getSessionSettings());
 	        }                               
 	        LogFactory logFactoryClient = new ScreenLogFactory(true, true, true);
 	        MessageFactory messageFactoryClient = new DefaultMessageFactory();
 	
-	        FIX_CLIENT = new SocketInitiator(applicationClient, messageStoreFactoryClient, sessionSettings, logFactoryClient, messageFactoryClient);
+	        FIX_CLIENT = new SocketInitiator(this, messageStoreFactoryClient, config.getSessionSettings(), logFactoryClient, messageFactoryClient);
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_CLIENT object created: " + FIX_CLIENT);	    	
 	    }
 
@@ -629,14 +606,20 @@ public class FixEngine implements Application {
 	    }
     }
 
-    private static void stopFixServer(){
+    /**
+     * Stops FIX_SERVER and nulls out FIX_SESSION and FIX_SERVER
+     */
+    private void stopFixServer(){
 	    LOGGER.info(MY_IP+"****STOPPING FIX SERVER APPLICATION");           
     	FIX_SERVER.stop();
     	FIX_SESSION=null;
 	    FIX_SERVER=null;
     }
 
-    private static void stopFixClient() {
+    /**
+     * Stops FIX_CLIENT and nulls out FIX_SESSION and FIX_CLIENT
+     */
+    private void stopFixClient() {
 	    LOGGER.info(MY_IP+"****STOPPING FIX CLIENT APPLICATION");
 	    if(FIX_CLIENT != null) {
 	    	FIX_CLIENT.stop();
@@ -646,30 +629,52 @@ public class FixEngine implements Application {
         FIX_SESSION=null;
     }
 
-    private static void heartbeatMessageProcessingLoop(SessionSettings sessionSettings) throws ConfigError {
+    /**
+     * Decides whether it's a client or server based on ConnectionType setting in FixEngineConfig.
+     * Calls getHeartbeatSprocStmt to create a DB connection and prepared statement. 
+     * Starts a FIX server (to let Global Accelerator health checks on the FIX port pass)
+     * Loops forever: 
+     * 	gets leader status from sproc
+     *  Stops FIX client if it stops being the leader
+     *  If it becomes the leader, starts Kafka consumer and producer, and the FIX client or server if they aren't already started
+     *  polls for any new Kafka messages
+     *  any new FIX messages will automatically be sent to Kafka by the fromApp method
+     * @param config
+     * @throws ConfigError
+     */
+    private void heartbeatMessageProcessingLoop(FixEngineConfig config) throws ConfigError {
         LOGGER.info(MY_IP+"*****START HEARTBEAT *****");
-    	boolean iAmClientFixEngine = "initiator".equals(sessionSettings.getString("ConnectionType"));
-    	String kafkaBrokerString = sessionSettings.getString("kafkaBootstrapBrokerString");
-    	String consumerGroupId = sessionSettings.getString("KafkaConsumerGroupID");
-    	String kafkaOutboundTopicName = sessionSettings.getString("KafkaOutboundTopicName");
-    	KAFKA_INBOUND_TOPIC_NAME = sessionSettings.getString("KafkaInboundTopicName");
-    	String myGAEndpointGroupArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointGroupArn");
-    	String myGAEndpointArn = iAmClientFixEngine ? null : sessionSettings.getString("GAEndpointArn");
-    	boolean useJdbcConnection = "true".equals(sessionSettings.getString("UseJdbcHeartbeat"));
-        
+    	boolean iAmClientFixEngine = "initiator".equals(config.getSessionSetting("ConnectionType"));
+    	String kafkaBrokerString = config.getSessionSetting("kafkaBootstrapBrokerString");
+    	String consumerGroupId = config.getSessionSetting("KafkaConsumerGroupID");
+    	String kafkaOutboundTopicName = config.getSessionSetting("KafkaOutboundTopicName");
+    	KAFKA_INBOUND_TOPIC_NAME = config.getSessionSetting("KafkaInboundTopicName");
+    	String myGAEndpointGroupArn = iAmClientFixEngine ? null : config.getSessionSetting("GAEndpointGroupArn");
+    	String myGAEndpointArn = iAmClientFixEngine ? null : config.getSessionSetting("GAEndpointArn");
+    	boolean useJdbcConnection = "true".equals(config.getSessionSetting("UseJdbcHeartbeat"));
+
     	CallableStatement heartbeatSprocStmt = null;
         if(useJdbcConnection) {
-        	addSqlDbConnectionCoordinatesToSettings(sessionSettings.getString("RDSClusterSecretArn"), sessionSettings);
-            heartbeatSprocStmt = getHeartbeatSprocStmt(sessionSettings.getString("JdbcDriver"), sessionSettings.getString("JdbcURL"), sessionSettings.getString("JdbcUser"), sessionSettings.getString("JdbcPassword"));
+        	config.addSqlDbConnectionCoordinatesToSettings(config.getSessionSetting("RDSClusterSecretArn"));
+            heartbeatSprocStmt = getHeartbeatSprocStmt(config.getSessionSetting("JdbcDriver"), config.getSessionSetting("JdbcURL"), config.getSessionSetting("JdbcUser"), config.getSessionSetting("JdbcPassword"));
         }
 
         if(!iAmClientFixEngine) {
-        	startFixServer(sessionSettings); // to let health check know we're alive
+        	startFixServer(config); // to let health check know we're alive
         }
 
         while(true) { 
 			LOGGER.info(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE);
-    		int leaderStatus = getLeaderStatus(heartbeatSprocStmt, IM_AM_THE_ACTIVE_ENGINE, useJdbcConnection);
+			int leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
+			try {
+				leaderStatus = getLeaderStatus(heartbeatSprocStmt, IM_AM_THE_ACTIVE_ENGINE, useJdbcConnection);
+			} catch (SQLException e) {
+				
+    			LOGGER.severe(MY_IP+"****HEARTBEAT: ***ERROR GETTING LEADER STATUS!*** " + e);
+    			e.printStackTrace();
+    			LOGGER.severe(MY_IP+"****HEARTBEAT: ***RECREATING HEARTBEAT CONNECTION TO ATTEMPT TO RECOVER!***");
+                heartbeatSprocStmt = getHeartbeatSprocStmt(config.getSessionSetting("JdbcDriver"), config.getSessionSetting("JdbcURL"), config.getSessionSetting("JdbcUser"), config.getSessionSetting("JdbcPassword"));
+			}
 			LOGGER.info(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE + " ; leaderStatus: " + leaderStatus);
     		
     	    if(leaderStatus == LEADER_STATUS_JUST_BECAME_LEADER) {
@@ -677,10 +682,10 @@ public class FixEngine implements Application {
     	        if(KAFKA_CONSUMER == null) { KAFKA_CONSUMER = startKafkaConsumer(kafkaBrokerString, consumerGroupId, kafkaOutboundTopicName); }
     	        if(KAFKA_PRODUCER == null) { KAFKA_PRODUCER = startKafkaProducer(kafkaBrokerString); }
     	        if(iAmClientFixEngine) {
-    	            startFixClient(sessionSettings);
+    	            startFixClient(config);
     	        } else {
     	            LOGGER.info(MY_IP+"**************** HEARTBEAT: I AM Server ENGINE***********");
-    	            startFixServer(sessionSettings);
+    	            startFixServer(config);
     	            if("10.130.0.66".equals(MY_IP)) {
     	            	LOGGER.severe(MY_IP+"**************** HEARTBEAT: NOT UPDATING GLOBAL ACCELERATOR ENDPOINT BECAUSE WE DONT HAVE ACCESS FROM THIS MACHINE!!!***********");
     	            } else {
@@ -702,38 +707,39 @@ public class FixEngine implements Application {
 
     	    processInboundKafkaMsgs(KAFKA_CONSUMER);
 
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ie) {
-                LOGGER.severe(MY_IP+"HEARTBEAT THREAD INTERRUPTED: " +ie);
-            }
+    	    if(HEARTBEAT_SLEEP_INTERVAL > 0) {
+	            try {
+	                Thread.sleep(HEARTBEAT_SLEEP_INTERVAL);
+	            } catch (InterruptedException ie) {
+	                LOGGER.severe(MY_IP+"HEARTBEAT THREAD INTERRUPTED: " +ie);
+	            }
+    	    }
         }
     }
 
-    public static void main(String[] args) throws ConfigError, InterruptedException, SessionNotFound, IOException {
-        LOGGER.setLevel(Level.INFO);
-        // LOGGER.setLevel(Level.FINE);
-
+    /**
+     * Instantiates FixEngine class using configfile location from args[0], then calls run() on it
+     * @param args
+     * @throws ConfigError 
+     */
+    public static void main(String[] args) throws ConfigError {    	
         String configfile = "config/server_test.cfg";
 //        String configfile = "config/client.cfg";
         if(args.length > 0) {
             configfile = args[0];
         }
-        LOGGER.info(MY_IP+"***MAIN STARTING WITH CONFIG FILE: " + configfile);
+        System.out.println("***MAIN STARTING WITH CONFIG FILE: " + configfile);
+    	FixEngine engine = new FixEngine(configfile);
+    	engine.run();
 
-//        Map<String, String> params = getSsmParameters();
-//        System.out.println("*************** SSM PARAMS: " + params);
-
-        SessionSettings sessionSettings = initializeParameters(configfile);
-
-//        //IM_AM_THE_CLIENT_ENGINE = true;
-
-        LOGGER.info(MY_IP+"MAIN: STARTING HEARTBEAT");
-        heartbeatMessageProcessingLoop(sessionSettings);
-
-        CountDownLatch latch = new CountDownLatch(1);
-        latch.await();
-    	LOGGER.info(MY_IP+"MAIN: GOT TO THE END! EXITING!");
+        try {
+            CountDownLatch latch = new CountDownLatch(1);
+			latch.await();
+		} catch (InterruptedException e) {
+	        System.out.println("MAIN: FINAL WAIT INTERRUPTED: " + e);
+			e.printStackTrace();
+		}
+        System.out.println("MAIN: GOT TO THE END! EXITING!");
     }   
 
 }
