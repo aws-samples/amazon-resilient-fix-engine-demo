@@ -51,6 +51,8 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import java.util.Arrays;
+import java.time.Duration;
+import java.util.Date;
 
 
 import java.io.FileNotFoundException;
@@ -64,27 +66,9 @@ import java.util.logging.Logger;
 import java.util.logging.LogManager;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Level;
+import java.text.SimpleDateFormat;
 
 import java.io.InputStream;
-
-/**
- * Fix engine tester and dummy order generator demo class
- *
- * <p>Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.</p>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of this
- * software and associated documentation files (the "Software"), to deal in the Software
- * without restriction, including without limitation the rights to use, copy, modify,
- * merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
- * permit persons to whom the Software is furnished to do so.
- * <p>
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
- * PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
- * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
- * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- */
 
 public class TestClient {
 
@@ -101,9 +85,14 @@ public class TestClient {
 	
 	private static int NO_OF_MESSAGES = 1;
 	private static int WAIT_BETWEEN_MESSAGES = 1000;
+	private static boolean SEND_EXEC_REPORT = true;
+	private static Date lastOrderGeneratedTime = null;
+	private static Date lastOrderRcvdTime = null;
+	
    	
    	public static NewOrderSingle generateOrder(int id) {
-		String orderIdStr = "ORDER_ID_" + System.currentTimeMillis();
+		//String orderIdStr = "ORDER_ID_" + System.currentTimeMillis();
+		String orderIdStr = "ORDER_ID_" + (1000000 + id);
 		String accountIdStr = "TEST_SENDER_COMP_ID";
 		String senderSubIdStr = "TEST_SENDER_SUB_ID";
 		String targetIdStr = "TEST_SENDER_COMP_ID";
@@ -116,7 +105,7 @@ public class TestClient {
 		header.setField(new SenderCompID(accountIdStr));
 		header.setField(new SenderSubID(senderSubIdStr));
 		header.setField(new TargetCompID(targetIdStr));
-//		newOrder.setChar(59, new TimeInForce(timeInForce).getValue());
+        // newOrder.setChar(59, new TimeInForce(timeInForce).getValue());
 		newOrder.setChar(59, timeInForce);
 		int quantitiyInt = 300;
 		newOrder.setInt(38, quantitiyInt);
@@ -126,7 +115,8 @@ public class TestClient {
 	}
     
 	public static ExecutionReport generateExecution(int id) {
-		String orderIdStr = "ORDER_ID_" + System.currentTimeMillis();
+        // String orderIdStr = "ORDER_ID_" + System.currentTimeMillis();
+        String orderIdStr = "ORDER_ID_" + 1000000 + id;
 		String execIdStr = "EXEC_ID_" + 1;
 		String symbolStr = "MSFT";
 		char side = Side.BUY;
@@ -151,12 +141,73 @@ public class TestClient {
         // setup kafka producer and consumefr
         setupKafka(configfile);
         
-        if (I_AM_TEST_CLIENT) {
-            LOGGER.info(" NO_OF_MESSAGES : " + NO_OF_MESSAGES + "WAIT_BETWEEN_MESSAGES: " + WAIT_BETWEEN_MESSAGES);
+        Thread a1 = new Thread(() -> {
+            LOGGER.info("***processKafkaMsgs Thread strated ****** ");
+            LOGGER.info("**SEND_EXEC_REPORT 11 : " + SEND_EXEC_REPORT);
+            //if (!I_AM_TEST_CLIENT && SEND_EXEC_REPORT) {
+            if (!I_AM_TEST_CLIENT) processKafkaMsgs();
+            LOGGER.info("***processKafkaMsgs Thread Ends******************************************************************************** ****** ");
+        });
+        
+        a1.start();
+       
             
+        generateOrders();
+        
+        
+        try { 
+            a1.join(); 
+        } 
+        catch (Exception e) { 
+            System.out.println(e); 
+        }
+        
+        // long totalTimeInSec = (lastOrderGeneratedTime.getTime() - startdate.getTime())/1000;
+        
+        // if (totalTimeInSec < 1) totalTimeInSec = 1;
+        
+        // double tps = NO_OF_MESSAGES/totalTimeInSec;
+        
+        // LOGGER.info(" ************ Order Generation Performance & Througput Results ******************* ");
+        // LOGGER.info("\n Start Time: " + startdate + 
+        //             "\n End Time: " + lastOrderGeneratedTime + "\n Total Messages Processed: " + NO_OF_MESSAGES 
+        //             + "\n Total Processing Time (seconds) " + totalTimeInSec + "\n TPS: " + tps);
+        	
+        // LOGGER.info(" ************ ************ ************ ************ ************");	
+    }
+    
+    
+    public static void setupKafka(String configfile) {
+        
+        getKafkaProperties(configfile);
+        getKafkaProducer();
+        getKafkaConsumer();
+        
+    }
+    
+    public static void getKafkaProducer() {
+
+		Properties properties = new Properties();
+        properties.setProperty("bootstrap.servers", KAFKA_BROKER_STRING);
+        properties.setProperty("key.serializer","org.apache.kafka.common.serialization.StringSerializer");
+        properties.setProperty("value.serializer","org.apache.kafka.common.serialization.StringSerializer");
+        // specify the protocol for Domain Joined clusters
+        //properties.setProperty(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, "SASL_PLAINTEXT");
+
+        KAFKA_PRODUCER = new KafkaProducer<>(properties);
+    }
+    
+    private static void generateOrders() throws InterruptedException{
+        
+        Date startdate = new Date();
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+        if (I_AM_TEST_CLIENT) {
+            
+            
+            LOGGER.info(" NO_OF_MESSAGES : " + NO_OF_MESSAGES + "  WAIT_BETWEEN_MESSAGES: " + WAIT_BETWEEN_MESSAGES);
             
             //for(int orderId=1;orderId<1000;orderId++) {
-            for(int orderId=1;orderId<NO_OF_MESSAGES;orderId++) {
+            for(int orderId=1;orderId<=NO_OF_MESSAGES;orderId++) {
                 String ordStr = null;
                 
                 Thread.sleep(WAIT_BETWEEN_MESSAGES);
@@ -184,33 +235,28 @@ public class TestClient {
     
                 //} // I_AM_TEST_CLIENT
             }
+            lastOrderGeneratedTime = new Date();
+            
+            
+            long totalTimeInSec = (lastOrderGeneratedTime.getTime() - startdate.getTime())/1000;
+        
+            if (totalTimeInSec < 1) totalTimeInSec = 1;
+            
+            double tps = NO_OF_MESSAGES/totalTimeInSec;
+            
+            LOGGER.info(" ************ Order Generation Performance & Througput Results ******************* ");
+            LOGGER.info("\n Start Time: " + sdf.format(startdate) + 
+                        "\n End Time: " + sdf.format(lastOrderGeneratedTime) + "\n Total Messages Processed: " + NO_OF_MESSAGES 
+                        + "\n Total Processing Time (seconds) " + totalTimeInSec + "\n TPS: " + tps);
+            	
+            LOGGER.info(" ************ ************ ************ ************ ************");
         }
         
-        processKafkaMsgs();
     }
     
     
-    public static void setupKafka(String configfile) {
-        
-        getKafkaProperties(configfile);
-        getKafkaProducer();
-        getKafkaConsumer();
-        
-    }
     
-    public static void getKafkaProducer() {
-
-		Properties properties = new Properties();
-        properties.setProperty("bootstrap.servers", KAFKA_BROKER_STRING);
-        properties.setProperty("key.serializer","org.apache.kafka.common.serialization.StringSerializer");
-        properties.setProperty("value.serializer","org.apache.kafka.common.serialization.StringSerializer");
-        // specify the protocol for Domain Joined clusters
-        //properties.setProperty(CommonClientConfigs.SECURITY_PROTOCOL_CONFIG, "SASL_PLAINTEXT");
-
-        KAFKA_PRODUCER = new KafkaProducer<>(properties);
-    }
-    
-     private static void getKafkaConsumer() {
+    private static void getKafkaConsumer() {
         LOGGER.fine("****getKafkaConsumer START*****");
 
 	    // Configure the consumer
@@ -236,34 +282,64 @@ public class TestClient {
     }
     
     private static void processKafkaMsgs() {
-        LOGGER.fine("****processInboundKafkaMsgs: Start ");
+        LOGGER.fine("****processKafkaMsgs: Start ");
         // Loop until ctrl + c
         // Harman: create a thread
         int count = 0;
+        boolean firstTime = true;
+        int x = 1;
+        //Date lastTime = null;
+        long totalTimeInSec = 0;
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+        Date firstOrderRcvdTime = null;
         
-        while(true) {
+        while(x ==1) {
 
             // Poll for records
-    	    ConsumerRecords<String, Object> records = KAFKA_CONSUMER.poll(200);
+    	    ConsumerRecords<String, Object> records = KAFKA_CONSUMER.poll(Duration.ofMillis(50));
             //LOGGER.fine(" After polling consumer records.count() : " + records.count());
             // Did we get any?
             if (records.count() == 0) {
                 // timeout/nothing to read
-                LOGGER.fine("nothing to read from Kafka");
+                LOGGER.info("nothing to read from Kafka");
+                
+                if (count > 0) {
+                     Date currentTime = new Date();
+                     totalTimeInSec = (currentTime.getTime() - lastOrderRcvdTime.getTime())/1000;
+                     
+                     if (totalTimeInSec > 20) { 
+                        x = 0;
+                        totalTimeInSec = (lastOrderRcvdTime.getTime() - firstOrderRcvdTime.getTime() )/1000 ;
+        
+                        if (totalTimeInSec < 1) totalTimeInSec = 1;
+                        
+                        double tps = count/totalTimeInSec;
+                        
+                        LOGGER.info(" ************ Order Received Performance & Througput Results ******************* ");
+                        LOGGER.info("\n Start Time: " + sdf.format(firstOrderRcvdTime) + 
+                                    "\n End Time: " + sdf.format(lastOrderRcvdTime) + "\n Total Messages Processed: " + count 
+                                    + "\n Total Processing Time (seconds) " + totalTimeInSec + "\n TPS: " + tps);
+                        	
+                        LOGGER.info(" ************ ************ ************ ************ ************");	
+                    }
+                }
+                
             } else {
+                
                 // Yes, loop over records
                 // for(ConsumerRecord<String, String> record: records) {
                 for(ConsumerRecord<String, Object> record: records) {
                     // Display record and count
+                    if (count == 0) firstOrderRcvdTime = new Date();
                     count += 1;
                     LOGGER.fine( count + ": " + record.value());
                     String ordStr = record.value().toString();
-                    LOGGER.info("*********** ORDER RCVD from Client *****************************************************************************************");
+                    LOGGER.info("*********** ORDER RCVD from Client or Server *****************************************************************************************");
                     LOGGER.info("*** processKafkaMsgs() ordStr : " + ordStr);
                     
                     // LOGGER.info("processInboundKafkaMsgs() I_AM_TEST_CLIENT : " + I_AM_TEST_CLIENT);
                 
-                    if (!I_AM_TEST_CLIENT) {
+                    if (!I_AM_TEST_CLIENT && SEND_EXEC_REPORT) {
                         // send the execution report back to client Fix Engine
                         ExecutionReport newExec = generateExecution(count);
                         ordStr = newExec.toString();
@@ -279,6 +355,7 @@ public class TestClient {
                     }
                             
                 } // for end
+                lastOrderRcvdTime = new Date();
         	} // if (records.count() == 0)
         	
         } //while loop
@@ -288,17 +365,9 @@ public class TestClient {
     
     private static Properties getKafkaProperties(String configfile) {
         LOGGER.fine("****GETTING KAFKA PROPERTIES 11: " + configfile);
-         
-        
         Properties kafkaprop = new Properties();  
             
         try {
-            // FileReader reader = new FileReader(currentDir + "config/kafka-server.properties");  
-            // kafkaprop.load(reader);
-        //     InputStream is = TestClient.class.getResourceAsStream(configfile);
-        // 	kafkaprop.load(is);
-        	
-        	
         	FileReader reader = new FileReader(configfile);  
         	kafkaprop.load(reader);
        
@@ -309,11 +378,15 @@ public class TestClient {
 	        
 	        NO_OF_MESSAGES = Integer.parseInt(kafkaprop.getProperty("NoOfMessages"));
 	        WAIT_BETWEEN_MESSAGES = Integer.parseInt(kafkaprop.getProperty("WaitBetweenMessages")) * 1000;
-		
+	        
+	        SEND_EXEC_REPORT = Boolean.parseBoolean(kafkaprop.getProperty("SendExecReport")); 
+		    
             
             LOGGER.info(" KAFKA_BROKER_STRING: " + KAFKA_BROKER_STRING);
+            LOGGER.info(" SEND_EXEC_REPORT: " + SEND_EXEC_REPORT);
         	I_AM_TEST_CLIENT = kafkaprop.getProperty("ConnectionType").equals("initiator");
         	LOGGER.info(" I_AM_TEST_CLIENT: " + I_AM_TEST_CLIENT);
+        	
         
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
