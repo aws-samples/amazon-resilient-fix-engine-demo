@@ -1,10 +1,12 @@
 ## Resilient FIX Engine on AWS
-- Example implementation of an AWS FIX service, which provides automated HA failover with an RTO of seconds and 0 RPO.
-- The implementation uses the QuickFixJ Java-based FIX engine to create FIX connections, and provides the ability to synchronize its state with a JDBC database (and a backup instance of itself).
+- Example implementation of an AWS FIX service, which provides automated HA (High Availability) failover, with an RTO (Recovery Time Objective) of seconds in case of failure of the primary engine, and 0 RPO (Recovery Point Objective) meaning no data loss.
+- The implementation uses the [QuickFixJ](http://www.quickfixengine.org/) Java-based FIX engine to create FIX connections, and provides the ability to synchronize its state with a hot standby backup engine using a JDBC database.
 - The provided Cloud Formation template and FIX encoding/decoding libraries from the QuickFix project can be used to quickly stand up the engine and use Java, Python, C++, Ruby, .NET or GO to use it to send and receive messages with any other FIX engine.
+- The solution can be configured either as a FIX server or a FIX client, and creates and configures all the infrastructure required to run, including the primary and backup engine, JDBC database, MSK (Kafka) queue, networking, configuration, security and SDLC components.
+- The solution can be reconfigured to run in asynchronous mode using EFS (with near-real-time replication) to achieve higher throughput with a lower RPO
 
 ## Vision
--FIX (Financial Information eXchange) is a protocol that allows vastly different institutions, technologies and architectures to communicate financial data to each other with minimal coupling and coordination effort.
+-[FIX](https://en.wikipedia.org/wiki/Financial_Information_eXchange) (Financial Information eXchange) is a protocol that allows vastly different institutions, technologies and architectures to communicate financial data to each other with minimal coupling and coordination effort.
 - Example of a FIX message : Execution Report (Pipe character is used to represent SOH character): 8=FIX.4.2|9=176|35=8|49=PHLX|56=PERS|52=20071123-05:30:00.000|11=ATOMNOCCC9990900|20=3|150=E|39=E|55=MSFT|167=CS|54=1|38=15|40=2|44=15|58=PHLX EQUITY TESTING|59=0|47=C|32=0|31=0|151=15|14=0|6=0|10=128|
 - The FIX protocol has ushered in an era of straight-through processing in capital markets, replacing faxes and phone calls, and allowing firms to exchange data in real time.
 - To achieve this, the FIX engine must be highly available and resilient against brief outages as well as data center failures, and allow participants to continue exchanging FIX messages.
@@ -19,14 +21,15 @@
 - Demonstrate how this design pattern can be deployed and used with AWS products and services, with a clear focus on security, scale, and distinguishable operational excellence
 
 ## Architecture
-- Open-source QuickFix engine and encoding/decoding libraries with Amazon's multi-region RDS database and MSK queues as well as Fargate containers, resilience and high availability becomes extremely simple to achieve.
-- Amazon's VPC, NLB and Global Accelerator technologies makes it easy to securely expose the FIX service to internal and external users, and route them to the active engine instance.
-- CloudFormation and SSM allows users to automatically create every component required to run a FIX server or client in a matter of minutes, and to reconfigure it without having to recreate it.
-- Java engine deployed as a container on Fargate ECS
-- Multi-AZ, multi-master database (MySQL) keep primary and secondary engine states in sync
-- Multi-AZ MSK allows seamless client failover
-- GlobalAccelerator transparently redirects clients to the currently active FIX engine
-- Internal heartbeat allows FIX engines to perform leader election without external watchers
+- Open-source QuickFix engine and encoding/decoding libraries with Amazon's multi-region [Aurora MySQL](https://aws.amazon.com/rds/aurora/) database and [MSK](https://aws.amazon.com/msk/) (managed Kafka) queues as well as [Fargate](https://aws.amazon.com/fargate/) (managed Docker) containers, resilience and high availability becomes extremely simple to achieve.
+- Amazon's [VPC](https://aws.amazon.com/vpc/) (Virtual Public Cloud), [NLB](https://aws.amazon.com/elasticloadbalancing/network-load-balancer/) (Network Load Balancer) and [Global Accelerator](https://aws.amazon.com/global-accelerator/) (intelligent network routing) technologies make it easy to securely expose the FIX service to internal and external users, and route them to the active engine instance.
+- [CloudFormation](https://aws.amazon.com/cloudformation/) (infrastructure-as code) and [SSM](https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html) (Systems Manager) allow users to automatically create every component required to run a FIX server or client in a matter of minutes, and to reconfigure it without having to recreate it.
+- Java engine deployed as a container on [Fargate ECS](https://aws.amazon.com/fargate/) (Managed Elastic Container Service)
+- [Multi-AZ](https://aws.amazon.com/rds/features/multi-az/) (Availability Zone), [multi-master](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-multi-master.html) database (Aurora MySQL) keep primary and secondary engine states in sync
+- The secondary engine is kept in hot-standby mode (always running but not processing messages until it detects that it's become the primary)
+- Multi-AZ [MSK](https://aws.amazon.com/msk/) (Managed Kafka) allows seamless client failover
+- [Global Accelerator](https://aws.amazon.com/global-accelerator/) transparently redirects clients to the currently active FIX engine
+- Internal SQL-based heartbeat uses a MySQL database table row as a mutex lock which allows FIX engines to perform leader election without external watchers
 - ![Architecture](FIX_ARCH.png)
 
 ## AWS vs. On-Prem Architecture
@@ -36,15 +39,16 @@
 
 ## Pre-requisites
 - An AWS account
-- Cloud9 (for building the container image) https://docs.aws.amazon.com/cloud9/latest/user-guide/setup-express.html
-- ECR (for hosting the container image) https://docs.aws.amazon.com/AmazonECR/latest/userguide/get-set-up-for-amazon-ecr.html
-- (Optionally) An existing VPC and subnets (one public, one private) where you'd like to run the FIX engine (if you don't have one or would like a new one creatd, simply run the "VPC" version of the Cloud Formation template included with this project.
+- The FIX port number and (optional for internal testing) DNS name you intend to use (either as a FIX server or client)
+- (Optionally) [Domain](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-register.html) which you control and a [hosted zone](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingHostedZone.html), which will be used to create a DNS alias for the FIX server (not required if you are using this solution only as a FIX client).
+- (Optionally) An existing [VPC and subnets](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/create-public-private-vpc.html) (one public, one private) where you'd like to run the FIX engine (if you don't have one or would like a new one creatd, simply run the "VPC" version of the Cloud Formation template included with this project.
 - The FIX port number and DNS name you intend to use (either as a FIX server or client)
-- Download/install the QuickFix version appropriate for the language and FIX protocol version that's used for your application from http://www.quickfixengine.org/
-- Download/install Kafka producer/consumer library appropriate for the language that's used for your application from https://cwiki.apache.org/confluence/display/KAFKA/Clients
+- Download/install the QuickFix version appropriate for the language and FIX protocol version that's used for your application from [quickfixengine.org/](http://www.quickfixengine.org/)
+- Download/install Kafka producer/consumer library appropriate for the language that's used for your application from [cwiki.apache.org/confluence/display/KAFKA/Clients](https://cwiki.apache.org/confluence/display/KAFKA/Clients)
+- (Optionally) [Cloud9](https://docs.aws.amazon.com/cloud9/latest/user-guide/setup-express.html) (for building the container image) 
+- (Optionally) [ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/get-set-up-for-amazon-ecr.html) (for hosting the container image) 
 
 ## Installation
-- Use Cloud9 to clone GitHub repo https://github.com/aws-samples/amazon-resilient-fix-engine-demo (git clone https://github.com/aws-samples/amazon-resilient-fix-engine-demo.git)
 - If you'd like to create a new VPC and subnets for the FIX engine, download and run this CloudFormation template https://github.com/aws-samples/amazon-resilient-fix-engine-demo/blob/main/cloudformation/FIXEngineVPCApplication.yml
 - If you'd like to share an existing VPC and subnets, download and run this CloudFormation template https://github.com/aws-samples/amazon-resilient-fix-engine-demo/blob/main/cloudformation/FIXEngineApplication.yml
 - View the Primary and Failover ECS tasks' Log Groups in CloudFormation and see which one's been elected leader
