@@ -41,7 +41,7 @@
 - An AWS account
 - The FIX port number and (optional for internal testing) DNS name you intend to use (either as a FIX server or client)
 - (Optionally) [Domain](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/domain-register.html) which you control and a [hosted zone](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/CreatingHostedZone.html), which will be used to create a DNS alias for the FIX server (not required if you are using this solution only as a FIX client).
-- (Optionally) An existing [VPC and subnets](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/create-public-private-vpc.html) (one public, one private) where you'd like to run the FIX engine (if you don't have one or would like a new one creatd, simply run the "VPC" version of the Cloud Formation template included with this project.
+- (Optionally) An existing [VPC and subnets](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/create-public-private-vpc.html) (one public, one private) where you'd like to run the FIX engine (if you don't have one or would like a new one created, simply run the "VPC" version of the Cloud Formation template included with this project.
 - The FIX port number and DNS name you intend to use (either as a FIX server or client)
 - Download/install the QuickFix version appropriate for the language and FIX protocol version that's used for your application from [quickfixengine.org/](http://www.quickfixengine.org/)
 - Download/install Kafka producer/consumer library appropriate for the language that's used for your application from [cwiki.apache.org/confluence/display/KAFKA/Clients](https://cwiki.apache.org/confluence/display/KAFKA/Clients)
@@ -49,6 +49,7 @@
 - (Optionally) [ECR](https://docs.aws.amazon.com/AmazonECR/latest/userguide/get-set-up-for-amazon-ecr.html) (for hosting the container image) 
 
 ## Installation
+- Visit the [AWS Regional Services](https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/) page to ensure all the required services listed in the Architecture section (particularly Managed Streaming for Apache Kafka) are available in your target region
 - If you'd like to create a new VPC and subnets for the FIX engine, download and run this CloudFormation template https://github.com/aws-samples/amazon-resilient-fix-engine-demo/blob/main/cloudformation/FIXEngineVPCApplication.yml
 - If you'd like to share an existing VPC and subnets, download and run this CloudFormation template https://github.com/aws-samples/amazon-resilient-fix-engine-demo/blob/main/cloudformation/FIXEngineApplication.yml
 - View the Primary and Failover ECS tasks' Log Groups in CloudFormation and see which one's been elected leader
