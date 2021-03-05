@@ -19,6 +19,8 @@
 - Build a cloud-native, highly available resilient FIX engine for financial services industry (FSI) to demonstrate how easy AWS makes it to quickly deploy and easily run complex, real-time services.
 - Enable migration of proprietary protocols and low-latency on-prem FSI trading services to AWS.
 - Demonstrate how this design pattern can be deployed and used with AWS products and services, with a clear focus on security, scale, and distinguishable operational excellence
+- Provide example code that users can adapt to meet this and other similar use cases
+
 
 ## Architecture
 - Open-source QuickFix engine and encoding/decoding libraries with Amazon's multi-region [Aurora MySQL](https://aws.amazon.com/rds/aurora/) database and [MSK](https://aws.amazon.com/msk/) (managed Kafka) queues as well as [Fargate](https://aws.amazon.com/fargate/) (managed Docker) containers, resilience and high availability becomes extremely simple to achieve.
