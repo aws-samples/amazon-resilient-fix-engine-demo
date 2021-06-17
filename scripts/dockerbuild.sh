@@ -31,4 +31,4 @@ sudo docker build -t fixengineonaws --file Dockerfile$ENGINE_ROLE .
 
 sudo docker tag fixengineonaws:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
 
-sudo docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO_NAME:latest
+sudo docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:latest
