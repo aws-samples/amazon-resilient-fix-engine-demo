@@ -98,9 +98,9 @@ Metadata:
         default: VPC CIDR
   Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.24
-  LastUpdated: December 06, 2020
-  Version: v1.24
+  Description: FIXEngineOnAWS - v1.32
+  LastUpdated: June 17, 2021
+  Version: v1.32
 Outputs:
   ApplicationID:
     Condition: ''
@@ -282,25 +282,32 @@ Resources:
       - AutomationDocumentStarterRole
     Properties:
       Code:
-        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
+        ZipFile: "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\n\
           from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
           LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\ndef handler(event,\
-          \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
-          \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\nssm_client = boto3.client('ssm')\n\
+          \ndef start_document(properties):\n    \n    try:\n        \n        response\
+          \ = ssm_client.start_automation_execution(\n            Parameters = {\n\
+          \                'ExecutionRoleArn': [\n                    properties['ExecutionRoleArn']\n\
+          \                ]\n            },\n            DocumentName = properties['AutomationDocumentName'],\n\
+          \        )\n    \n        return True\n    \n    except ClientError as e:\n\
+          \        print(str(e)); return False\n\n'''\n    - ExecutionRoleArn | str\n\
+          \    - EligibleRequestTypes | list\n    - AutomationDocumentName | str\n\
+          '''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED\
+          \ -----')\n    LOGGER.info(json.dumps(event))\n    \n    responseData =\
+          \ {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
           \    properties = event['ResourceProperties']['Properties']\n    \n    if\
           \ 'EligibleRequestTypes' not in properties:\n        properties['EligibleRequestTypes']\
           \ = ['Create']\n    \n    if event['RequestType'] in properties['EligibleRequestTypes']:\n\
-          \        \n        ssm_client = boto3.client('ssm')\n        \n        try:\n\
-          \        \n            response = ssm_client.start_automation_execution(\n\
-          \                DocumentName = properties['AutomationDocumentName'],\n\
-          \            )\n        \n            return cfnresponse.send(event, context,\
-          \ cfnresponse.SUCCESS, responseData, properties['AutomationDocumentName'])\n\
-          \        \n        except ClientError as e:\n        \n            print(str(e))\n\
-          \            return cfnresponse.send(event, context, cfnresponse.FAILED,\
-          \ responseData)\n    \n    elif event['RequestType'] not in properties['EligibleRequestTypes']:\n\
-          \        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData)"
+          \        \n        attempt_cnt = 0\n        while attempt_cnt < 5:\n   \
+          \         \n            if attempt_cnt > 0:\n                time.sleep(10)\n\
+          \            \n            if start_document(properties) is True:\n    \
+          \            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
+          \ responseData, properties['AutomationDocumentName'])\n        \n      \
+          \      attempt_cnt += 1\n            \n        return cfnresponse.send(event,\
+          \ context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType']\
+          \ not in properties['EligibleRequestTypes']:\n        \n        return cfnresponse.send(event,\
+          \ context, cfnresponse.SUCCESS, responseData)"
       Description: !Join
         - ''
         - - 'AutomationDocumentStarter resource for '
@@ -309,7 +316,7 @@ Resources:
       Handler: index.handler
       Role: !GetAtt 'AutomationDocumentStarterRole.Arn'
       Runtime: python3.7
-      Timeout: 15
+      Timeout: 180
     Type: AWS::Lambda::Function
   AutomationDocumentStarterLogGroup:
     Condition: ''
@@ -420,13 +427,15 @@ Resources:
       Value: !Ref 'DebugLogging'
     Type: AWS::SSM::Parameter
   ECRRepository:
+    DependsOn:
+      - StackNameManipulator
     Properties:
       ImageScanningConfiguration:
-        scanOnPush: true
+        ScanOnPush: true
       RepositoryName: !Join
         - ''
         - - fix-engine-on-aws/
-          - !Ref 'AWS::StackName'
+          - !GetAtt 'StackNameManipulator.OutputString'
     Type: AWS::ECR::Repository
   ECSImageBuildDocument:
     DependsOn:
@@ -436,7 +445,7 @@ Resources:
       - ECSImageBuildInstanceRoleProfile
     Properties:
       Content:
-        assumeRole: !GetAtt 'ECSImageBuildExecutionRole.Arn'
+        assumeRole: '{{ExecutionRoleArn}}'
         description: !Join
           - ''
           - - 'Creates the client and server images use by CloudFormation stack '
@@ -545,6 +554,10 @@ Resources:
             isEnd: true
             name: SignalFailure
         parameters:
+          ExecutionRoleArn:
+            default: !GetAtt 'ECSImageBuildExecutionRole.Arn'
+            description: The service role to use for this automation.
+            type: String
           LatestAmazonLinux2AMIId:
             default: '{{ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs}}'
             description: The latest Amazon Linux 2 AMI queried from the public parameter.
@@ -554,7 +567,7 @@ Resources:
     Type: AWS::SSM::Document
   ECSImageBuildExecutionRole:
     DependsOn:
-      - ECSImageBuildLogGroup
+      - ECSImageBuildInstanceRole
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -570,10 +583,7 @@ Resources:
         - PolicyDocument:
             Statement:
               - Action:
-                  - logs:PutLogEvents
-                  - logs:CreateLogStream
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
+                  - ec2:RunInstances
                 Effect: Allow
                 Resource:
                   - '*'
@@ -581,7 +591,7 @@ Resources:
                   - iam:PassRole
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !GetAtt 'ECSImageBuildInstanceRole.Arn'
               - Action:
                   - cloudformation:SignalResource
                 Effect: Allow
@@ -590,7 +600,9 @@ Resources:
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   ECSImageBuildInstanceRole:
-    DependsOn: []
+    DependsOn:
+      - ECRRepository
+      - ECSImageBuildLogGroup
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -619,6 +631,31 @@ Resources:
                 Effect: Allow
                 Resource:
                   - '*'
+              - Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'ECSImageBuildLogGroup'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'ECSImageBuildLogGroup'
+                      - :log-stream:*
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   ECSImageBuildInstanceRoleProfile:
@@ -636,7 +673,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - ECSImageBuild
-      RetentionInDays: 7
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   ECSImageBuildPolicy:
     DependsOn:
@@ -675,6 +712,12 @@ Resources:
       - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for EC2 Instances Launched via SSM Automation
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All Outbound Traffic
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 65535
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
   ECSImageBuildStarter:
@@ -682,7 +725,6 @@ Resources:
       - ECRRepository
       - ECSImageBuildPolicy
       - ECSImageBuildDocument
-      - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
     Properties:
       Properties:
@@ -690,8 +732,9 @@ Resources:
         EligibleRequestTypes:
           - Create
           - Update
+        ExecutionRoleArn: !GetAtt 'ECSImageBuildExecutionRole.Arn'
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.24'
+        TemplateVersion: '1.32'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -709,7 +752,6 @@ Resources:
   ECSImageRemover:
     DependsOn:
       - ECRRepository
-      - ECSImageRemoverFunction
       - ECSImageRemoverLogGroup
     Properties:
       Properties:
@@ -727,9 +769,10 @@ Resources:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
           from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
           LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\ndef handler(event,\
-          \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
-          \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - RepositoryName\
+          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
+          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
+          \ = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
           \    properties = event['ResourceProperties']['Properties']\n    \n    if\
           \ event['RequestType'] in ['Delete']:\n        \n        ecr_client = boto3.client('ecr')\n\
           \n        try:\n            \n            existing_images = ecr_client.describe_images(\n\
@@ -798,7 +841,6 @@ Resources:
   FIXClientPrefixListUpdater:
     DependsOn:
       - FIXClientVPCPrefixList
-      - VPCPrefixListManagerFunction
       - VPCPrefixListManagerLogGroup
     Properties:
       Properties:
@@ -1129,7 +1171,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - b
       CidrBlock: !Ref 'FailoverPublicSubnetCIDR'
-      MapPublicIpOnLaunch: 'true'
+      MapPublicIpOnLaunch: 'false'
       Tags:
         - Key: Name
           Value: !Join
@@ -1218,6 +1260,12 @@ Resources:
       - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for Fargate Tasks
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All Outbound Traffic
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 65535
       SecurityGroupIngress:
         - Description: FIX Engine Access for FIX Clients
           FromPort: !If
@@ -1419,7 +1467,6 @@ Resources:
     Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
-      - GlobalAcceleratorInfoRetrieverFunction
       - GlobalAcceleratorInfoRetrieverLogGroup
     Properties:
       Properties:
@@ -1437,9 +1484,10 @@ Resources:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
           from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
           LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\ndef handler(event,\
-          \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
-          \n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - AcceleratorArn\
+          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
+          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
+          \ = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
           \    properties = event['ResourceProperties']['Properties']\n    \n    if\
           \ event['RequestType'] in ['Create', 'Update']:\n\n        accelerator_client\
           \ = boto3.client('globalaccelerator', region_name = 'us-west-2')\n\n   \
@@ -1594,7 +1642,6 @@ Resources:
   MSKClusterInfoRetriever:
     DependsOn:
       - MSKCluster
-      - MSKClusterInfoRetrieverFunction
       - MSKClusterInfoRetrieverLogGroup
     Properties:
       Properties:
@@ -1612,16 +1659,16 @@ Resources:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
           from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
           LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\ndef handler(event,\
-          \ context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
-          \n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    #\
-          \ ClusterARN\n    if operation == 'GetMSKClusterInfo':\n        \n     \
-          \   if event['RequestType'] in ['Create', 'Update']:\n        \n       \
-          \     msk_client = boto3.client('kafka')\n        \n            try:\n \
-          \       \n                nodes = msk_client.list_nodes(\n             \
-          \       ClusterArn = properties['ClusterARN']\n                )\n     \
-          \   \n                if 'NodeInfoList' not in nodes or len(nodes['NodeInfoList'])\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - ClusterARN\
+          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
+          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
+          \ = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
+          \ operation == 'GetMSKClusterInfo':\n        \n        if event['RequestType']\
+          \ in ['Create', 'Update']:\n        \n            msk_client = boto3.client('kafka')\n\
+          \        \n            try:\n        \n                nodes = msk_client.list_nodes(\n\
+          \                    ClusterArn = properties['ClusterARN']\n           \
+          \     )\n        \n                if 'NodeInfoList' not in nodes or len(nodes['NodeInfoList'])\
           \ == 0:\n        \n                    return cfnresponse.send(event, context,\
           \ cfnresponse.FAILED, responseData)\n        \n                else:\n \
           \       \n                    for node in nodes['NodeInfoList']:\n     \
@@ -1687,13 +1734,13 @@ Resources:
     DependsOn:
       - MSKClusterPrepPolicy
       - MSKInitializationDocument
-      - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
     Properties:
       Properties:
         AutomationDocumentName: !Ref 'MSKInitializationDocument'
         EligibleRequestTypes:
           - Create
+        ExecutionRoleArn: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -1733,7 +1780,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
   MSKClusterPrepExecutionRole:
     DependsOn:
-      - MSKClusterPrepLogGroup
+      - MSKClusterPrepInstanceRole
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1749,10 +1796,7 @@ Resources:
         - PolicyDocument:
             Statement:
               - Action:
-                  - logs:PutLogEvents
-                  - logs:CreateLogStream
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
+                  - ec2:RunInstances
                 Effect: Allow
                 Resource:
                   - '*'
@@ -1760,7 +1804,7 @@ Resources:
                   - iam:PassRole
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !GetAtt 'MSKClusterPrepInstanceRole.Arn'
               - Action:
                   - cloudformation:SignalResource
                 Effect: Allow
@@ -1771,6 +1815,7 @@ Resources:
   MSKClusterPrepInstanceRole:
     DependsOn:
       - MSKCluster
+      - MSKClusterPrepLogGroup
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1790,6 +1835,31 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !Ref 'MSKCluster'
+              - Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'MSKClusterPrepLogGroup'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'MSKClusterPrepLogGroup'
+                      - :log-stream:*
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   MSKClusterPrepInstanceRoleProfile:
@@ -1807,7 +1877,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - MSKPrepAutomation
-      RetentionInDays: 7
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   MSKClusterPrepPolicy:
     DependsOn:
@@ -1846,6 +1916,12 @@ Resources:
       - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for MSK Cluster Prep
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All Outbound Traffic
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 65535
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
   MSKClusterSecurityGroup:
@@ -1856,6 +1932,12 @@ Resources:
       - PrimaryPrivateSubnet
     Properties:
       GroupDescription: Security Group for MSK Cluster
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All Outbound Traffic
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 65535
       SecurityGroupIngress:
         - Description: MSK Access for Private User App Ranges
           FromPort: !If
@@ -1894,7 +1976,7 @@ Resources:
       - MSKClusterPrepInstanceRoleProfile
     Properties:
       Content:
-        assumeRole: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
+        assumeRole: '{{ExecutionRoleArn}}'
         description: !Join
           - ''
           - - 'Configures the MSK cluster by CloudFormation stack '
@@ -1999,6 +2081,10 @@ Resources:
             isEnd: true
             name: SignalFailure
         parameters:
+          ExecutionRoleArn:
+            default: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
+            description: The service role to use for this automation.
+            type: String
           LatestAmazonLinux2AMIId:
             default: '{{ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs}}'
             description: The latest Amazon Linux 2 AMI queried from the public parameter.
@@ -2006,6 +2092,65 @@ Resources:
         schemaVersion: '0.3'
       DocumentType: Automation
     Type: AWS::SSM::Document
+  MiscMethodsHandlerFunction:
+    Condition: ''
+    DependsOn:
+      - MiscMethodsHandlerRole
+    Properties:
+      Code:
+        ZipFile: "import json\nimport logging\nimport cfnresponse\nfrom botocore.exceptions\
+          \ import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\
+          \ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED\
+          \ -----')\n    LOGGER.info(json.dumps(event))\n\n    response_data = {}\n\
+          \    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
+          \ event['RequestType'] in ['Create', 'Update']:\n        \n        if operation\
+          \ == 'ManipulateString':\n            \n            action = properties['Action']\n\
+          \            input_str = properties['InputString']\n            \n     \
+          \       if action == 'lower':\n                sanitized_str = input_str.lower()\n\
+          \                \n            elif action == 'upper':\n               \
+          \ sanitized_str = input_str.upper()\n                \n            response_data['OutputString']\
+          \ = sanitized_str\n            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
+          \ response_data, sanitized_str)\n                \n    elif event['RequestType']\
+          \ in ['Delete']:\n        \n        return cfnresponse.send(event, context,\
+          \ cfnresponse.SUCCESS, response_data)"
+      Description: !Join
+        - ''
+        - - 'MiscMethodsHandler resource for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Handler: index.handler
+      Role: !GetAtt 'MiscMethodsHandlerRole.Arn'
+      Runtime: python3.7
+      Timeout: 15
+    Type: AWS::Lambda::Function
+  MiscMethodsHandlerLogGroup:
+    Condition: ''
+    DependsOn:
+      - MiscMethodsHandlerFunction
+    Properties:
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Ref 'MiscMethodsHandlerFunction'
+      RetentionInDays: 30
+    Type: AWS::Logs::LogGroup
+  MiscMethodsHandlerRole:
+    Condition: ''
+    DependsOn: []
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies: []
+    Type: AWS::IAM::Role
   NATGatewayIPAddressesParam:
     Condition: ''
     Properties:
@@ -2295,7 +2440,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - a
       CidrBlock: !Ref 'PrimaryPublicSubnetCIDR'
-      MapPublicIpOnLaunch: 'true'
+      MapPublicIpOnLaunch: 'false'
       Tags:
         - Key: Name
           Value: !Join
@@ -2419,10 +2564,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' RDS cluster'
       GenerateSecretString:
-        ExcludeCharacters: '"@/\,'''
+        ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
         ExcludeLowercase: 'false'
         ExcludeNumbers: 'false'
-        ExcludePunctuation: 'false'
+        ExcludePunctuation: 'true'
         ExcludeUppercase: 'false'
         GenerateStringKey: password
         IncludeSpace: 'false'
@@ -2454,13 +2599,13 @@ Resources:
     DependsOn:
       - RDSClusterPrepPolicy
       - RDSInitializationDocument
-      - AutomationDocumentStarterFunction
       - AutomationDocumentStarterLogGroup
     Properties:
       Properties:
         AutomationDocumentName: !Ref 'RDSInitializationDocument'
         EligibleRequestTypes:
           - Create
+        ExecutionRoleArn: !GetAtt 'RDSClusterPrepExecutionRole.Arn'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -2483,10 +2628,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' RDS cluster'
       GenerateSecretString:
-        ExcludeCharacters: '"@/\,'''
+        ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
         ExcludeLowercase: 'false'
         ExcludeNumbers: 'false'
-        ExcludePunctuation: 'false'
+        ExcludePunctuation: 'true'
         ExcludeUppercase: 'false'
         GenerateStringKey: password
         IncludeSpace: 'false'
@@ -2533,8 +2678,7 @@ Resources:
         server_audit_logs_upload: 0
     Type: AWS::RDS::DBClusterParameterGroup
   RDSClusterPrepExecutionRole:
-    DependsOn:
-      - RDSClusterPrepLogGroup
+    DependsOn: []
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -2550,10 +2694,7 @@ Resources:
         - PolicyDocument:
             Statement:
               - Action:
-                  - logs:PutLogEvents
-                  - logs:CreateLogStream
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
+                  - ec2:RunInstances
                 Effect: Allow
                 Resource:
                   - '*'
@@ -2561,7 +2702,7 @@ Resources:
                   - iam:PassRole
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !GetAtt 'RDSClusterPrepInstanceRole.Arn'
               - Action:
                   - cloudformation:SignalResource
                 Effect: Allow
@@ -2571,6 +2712,7 @@ Resources:
     Type: AWS::IAM::Role
   RDSClusterPrepInstanceRole:
     DependsOn:
+      - RDSClusterPrepLogGroup
       - RDSClusterAdminSecret
       - RDSClusterNonAdminSecret
     Properties:
@@ -2593,6 +2735,31 @@ Resources:
                 Resource:
                   - !Ref 'RDSClusterAdminSecret'
                   - !Ref 'RDSClusterNonAdminSecret'
+              - Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'RDSClusterPrepLogGroup'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - ':log-group:'
+                      - !Ref 'RDSClusterPrepLogGroup'
+                      - :log-stream:*
           PolicyName: primary-policy
     Type: AWS::IAM::Role
   RDSClusterPrepInstanceRoleProfile:
@@ -2610,7 +2777,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - RDSPrepAutomation
-      RetentionInDays: 7
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   RDSClusterPrepPolicy:
     DependsOn:
@@ -2671,7 +2838,12 @@ Resources:
         - - 'Security Group for '
           - !Ref 'AWS::StackName'
           - ' RDS Cluster'
-      SecurityGroupEgress: []
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All Outbound Traffic
+          FromPort: 1
+          IpProtocol: tcp
+          ToPort: 65535
       SecurityGroupIngress:
         - Description: Fargate Task
           FromPort: 3306
@@ -2712,7 +2884,7 @@ Resources:
       - RDSClusterPrepInstanceRoleProfile
     Properties:
       Content:
-        assumeRole: !GetAtt 'RDSClusterPrepExecutionRole.Arn'
+        assumeRole: '{{ExecutionRoleArn}}'
         description: !Join
           - ''
           - - 'Configure a FIX Engine DB cluster created by CloudFormation stack '
@@ -2934,6 +3106,10 @@ Resources:
             isEnd: true
             name: SignalFailure
         parameters:
+          ExecutionRoleArn:
+            default: !GetAtt 'RDSClusterPrepExecutionRole.Arn'
+            description: The service role to use for this automation.
+            type: String
           LatestUbuntu2004AMIId:
             default: '{{ssm:/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
             description: The latest Ubuntu 20.04 LTS AMI queried from the public parameter.
@@ -2957,52 +3133,52 @@ Resources:
     Properties:
       AddressFamily: IPv4
       Entries:
-        - Cidr: 54.252.254.192/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-2
-        - Cidr: 177.71.207.128/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:sa-east-1
-        - Cidr: 54.255.254.192/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-1
-        - Cidr: 52.80.198.0/25
-          Description: AWS:ROUTE53_HEALTHCHECKS:cn-north-1
-        - Cidr: 54.244.52.192/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-2
-        - Cidr: 54.251.31.128/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-1
+        - Cidr: 15.177.0.0/18
+          Description: AWS:ROUTE53_HEALTHCHECKS:GLOBAL
         - Cidr: 52.80.197.0/25
           Description: AWS:ROUTE53_HEALTHCHECKS:cn-north-1
-        - Cidr: 54.241.32.64/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-1
-        - Cidr: 54.245.168.0/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-2
-        - Cidr: 54.232.40.64/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:sa-east-1
         - Cidr: 52.80.197.128/25
           Description: AWS:ROUTE53_HEALTHCHECKS:cn-north-1
+        - Cidr: 52.80.198.0/25
+          Description: AWS:ROUTE53_HEALTHCHECKS:cn-north-1
+        - Cidr: 52.83.34.128/25
+          Description: AWS:ROUTE53_HEALTHCHECKS:cn-northwest-1
+        - Cidr: 52.83.35.0/25
+          Description: AWS:ROUTE53_HEALTHCHECKS:cn-northwest-1
         - Cidr: 52.83.35.128/25
           Description: AWS:ROUTE53_HEALTHCHECKS:cn-northwest-1
         - Cidr: 54.248.220.0/26
           Description: AWS:ROUTE53_HEALTHCHECKS:ap-northeast-1
-        - Cidr: 52.83.35.0/25
-          Description: AWS:ROUTE53_HEALTHCHECKS:cn-northwest-1
-        - Cidr: 176.34.159.192/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:eu-west-1
-        - Cidr: 54.252.79.128/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-2
-        - Cidr: 52.83.34.128/25
-          Description: AWS:ROUTE53_HEALTHCHECKS:cn-northwest-1
-        - Cidr: 54.183.255.128/26
-          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-1
         - Cidr: 54.250.253.192/26
           Description: AWS:ROUTE53_HEALTHCHECKS:ap-northeast-1
-        - Cidr: 15.177.0.0/18
-          Description: AWS:ROUTE53_HEALTHCHECKS:GLOBAL
+        - Cidr: 54.251.31.128/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-1
+        - Cidr: 54.255.254.192/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-1
+        - Cidr: 54.252.254.192/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-2
+        - Cidr: 54.252.79.128/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:ap-southeast-2
+        - Cidr: 176.34.159.192/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:eu-west-1
         - Cidr: 54.228.16.0/26
           Description: AWS:ROUTE53_HEALTHCHECKS:eu-west-1
+        - Cidr: 177.71.207.128/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:sa-east-1
+        - Cidr: 54.232.40.64/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:sa-east-1
         - Cidr: 107.23.255.0/26
           Description: AWS:ROUTE53_HEALTHCHECKS:us-east-1
         - Cidr: 54.243.31.192/26
           Description: AWS:ROUTE53_HEALTHCHECKS:us-east-1
+        - Cidr: 54.183.255.128/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-1
+        - Cidr: 54.241.32.64/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-1
+        - Cidr: 54.244.52.192/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-2
+        - Cidr: 54.245.168.0/26
+          Description: AWS:ROUTE53_HEALTHCHECKS:us-west-2
       MaxEntries: 30
       PrefixListName: AWS:Route53HealthChecks
     Type: AWS::EC2::PrefixList
@@ -3023,6 +3199,17 @@ Resources:
       Type: String
       Value: !Ref 'SenderCompID'
     Type: AWS::SSM::Parameter
+  StackNameManipulator:
+    DependsOn:
+      - MiscMethodsHandlerLogGroup
+    Properties:
+      Properties:
+        Action: lower
+        InputString: !Ref 'AWS::StackName'
+      ServiceToken: !GetAtt 'MiscMethodsHandlerFunction.Arn'
+      Type: Custom::ManipulateString
+      Version: '1.0'
+    Type: AWS::CloudFormation::CustomResource
   TargetCompIDParam:
     Condition: ''
     Properties:
@@ -3043,7 +3230,6 @@ Resources:
   UserApplicationPrefixListUpdater:
     DependsOn:
       - UserApplicationVPCPrefixList
-      - VPCPrefixListManagerFunction
       - VPCPrefixListManagerLogGroup
     Properties:
       Properties:
