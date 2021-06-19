@@ -90,6 +90,7 @@
                         "default": "FIX Configuration"
                     },
                     "Parameters": [
+                        "FIXVersion",
                         "FIXServerPort",
                         "ConnectionType",
                         "DebugLogging",
@@ -149,6 +150,9 @@
                 "FIXServerDNSName": {
                     "default": "FIX Server DNS Name"
                 },
+                "FIXVersion": {
+                    "default": "FIX Version"
+                },
                 "FailoverPrivateSubnet": {
                     "default": "Failover Private Subnet"
                 },
@@ -192,9 +196,9 @@
         },
         "Comments": "FIX Engine on AWS POC",
         "CreatedBy": "Carter Meyers",
-        "Description": "FIXEngineOnAWS - v1.32",
-        "LastUpdated": "June 17, 2021",
-        "Version": "v1.32"
+        "Description": "FIXEngineOnAWS - v1.33",
+        "LastUpdated": "June 19, 2021",
+        "Version": "v1.33"
     },
     "Outputs": {
         "ApplicationID": {
@@ -231,6 +235,12 @@
             "Condition": "",
             "Value": {
                 "Ref": "FIXServerPort"
+            }
+        },
+        "FIXVersion": {
+            "Condition": "",
+            "Value": {
+                "Ref": "FIXVersion"
             }
         },
         "FailoverMSKEndpoint": {
@@ -373,6 +383,11 @@
             "MaxValue": 65535,
             "MinValue": 1,
             "Type": "Number"
+        },
+        "FIXVersion": {
+            "Default": "42",
+            "Description": "The desired FIX engine version.",
+            "Type": "String"
         },
         "FailoverPrivateSubnet": {
             "Description": "The private subnet you wish to use for your failover compute and data resources.",
@@ -1224,7 +1239,7 @@
                     "RepositoryName": {
                         "Ref": "ECRRepository"
                     },
-                    "TemplateVersion": "1.32"
+                    "TemplateVersion": "1.33"
                 },
                 "ServiceToken": {
                     "Fn::GetAtt": [
@@ -1506,6 +1521,41 @@
                 "Type": "String",
                 "Value": {
                     "Ref": "FIXServerPort"
+                }
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
+        "FIXVersionParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "FIX engine version for ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "FIXVersion"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": {
+                    "Ref": "FIXVersion"
                 }
             },
             "Type": "AWS::SSM::Parameter"

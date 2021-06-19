@@ -33,6 +33,7 @@ Metadata:
       - Label:
           default: FIX Configuration
         Parameters:
+          - FIXVersion
           - FIXServerPort
           - ConnectionType
           - DebugLogging
@@ -70,6 +71,8 @@ Metadata:
         default: FIX Client CIDRs
       FIXServerDNSName:
         default: FIX Server DNS Name
+      FIXVersion:
+        default: FIX Version
       FailoverPrivateSubnet:
         default: Failover Private Subnet
       FailoverPrivateSubnetCIDR:
@@ -98,9 +101,9 @@ Metadata:
         default: VPC CIDR
   Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.32
-  LastUpdated: June 17, 2021
-  Version: v1.32
+  Description: FIXEngineOnAWS - v1.33
+  LastUpdated: June 19, 2021
+  Version: v1.33
 Outputs:
   ApplicationID:
     Condition: ''
@@ -120,6 +123,9 @@ Outputs:
   FIXServerPort:
     Condition: ''
     Value: !Ref 'FIXServerPort'
+  FIXVersion:
+    Condition: ''
+    Value: !Ref 'FIXVersion'
   FailoverMSKEndpoint:
     Condition: ''
     Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
@@ -202,6 +208,10 @@ Parameters:
     MaxValue: 65535
     MinValue: 1
     Type: Number
+  FIXVersion:
+    Default: '42'
+    Description: The desired FIX engine version.
+    Type: String
   FailoverPrivateSubnet:
     Description: The private subnet you wish to use for your failover compute and
       data resources.
@@ -724,7 +734,7 @@ Resources:
           - Update
         ExecutionRoleArn: !GetAtt 'ECSImageBuildExecutionRole.Arn'
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.32'
+        TemplateVersion: '1.33'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -891,6 +901,23 @@ Resources:
       Tier: Standard
       Type: String
       Value: !Ref 'FIXServerPort'
+    Type: AWS::SSM::Parameter
+  FIXVersionParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'FIX engine version for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - FIXVersion
+      Tier: Standard
+      Type: String
+      Value: !Ref 'FIXVersion'
     Type: AWS::SSM::Parameter
   FailoverAcceptorECSService:
     Condition: IsAcceptorStack
