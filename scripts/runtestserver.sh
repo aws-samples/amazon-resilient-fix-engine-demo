@@ -1,1 +1,1 @@
-java -cp ./fixengineonaws.jar:./libs/* com.amazonaws.fixengineonaws.TestClient ./test-server.cfg
+java -cp ./build/libs/fixengineonaws.jar:./lib/* com.amazonaws.fixengineonaws.TestClient  ./src/main/resources/config/test-server.cfg
