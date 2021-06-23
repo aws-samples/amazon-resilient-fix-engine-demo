@@ -106,7 +106,6 @@ export BootstrapBrokerString=<broker-1>:9092,<broker-2>:9092
 ./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString
 ./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning
 
-
 ## API Documentation
 - You can find the QuickFix Message API documentation here https://javadoc.io/doc/org.quickfixj/quickfixj-core/latest/index.html
 - You can find the QUickFix engine operating instructions here http://www.quickfixengine.org/quickfix/doc/html/
