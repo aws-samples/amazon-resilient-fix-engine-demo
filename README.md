@@ -73,8 +73,39 @@
 - within the log group, there will be 2 log streams for primary e.g. FixEngineOnAws-Client-1-19/Primary/FixEngineOnAws...... and failover FixEngineOnAws-Client-1-19/Failover/FixEngineOnAws.......
 
 ## Testing
-- java -cp fixengineonaws.jar com.amazonaws.fixengineonaws.TestClient config/client.cfg
-- java -cp fixengineonaws.jar com.amazonaws.fixengineonaws.TestClient config/server.cfg
+- For local testing provision an EC2 or AWS Cloud9 in same VPC where FIX Server and FIX Client Engine is deployed. 
+- Install required packages
+sudo yum install telnet
+sudo yum install jq git docker java-1.8.0-openjdk-devel -y
+wget https://archive.apache.org/dist/kafka/2.2.1/kafka_2.12-2.2.1.tgz
+tar -xzf kafka_2.12-2.2.1.tgz
+sudo wget -c https://services.gradle.org/distributions/gradle-6.6.1-all.zip
+sudo unzip gradle-6.6.1-all.zip -d /opt
+sudo ln -s /opt/gradle-6.6.1 /opt/gradle
+- Update .bash_profile to add below  
+export GRADLE_HOME=/opt/gradle
+export PATH=$PATH:\/opt/gradle/bin
+- Update src/main/resources/config/test-client.cfg and src/main/resources/config/test-server.cfg to update KafkaBootstrapBrokerString, NoOfMessages and WaitBetweenMessages
+- Create a local build if you are planning to modify code or you could use the already built jar located at build/libs/fixengineonaws.jar
+cd amazon-resilient-fix-engine-demo
+gradle build
+- Open a terminal window and run the test client on FIX Server side
+./scripts/runtestserver.sh
+- Open a terminal window and run the test client on FIX Client side 
+./scripts/runtestclient.sh 
+- Open a terminal window and monitor execution reports received back by FIX Client MSK
+export PS1="MSK-Client-1 >"
+cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin
+export BootstrapBrokerString=<broker-1>:9092,<broker-2>:9092
+./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString
+./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning
+- Open a terminal window and and ,onitor order received by FIX Server MSK
+export PS1="MSK-Server-1 >"
+cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin
+export BootstrapBrokerString=<broker-1>:9092,<broker-2>:9092
+./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString
+./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning
+
 
 ## API Documentation
 - You can find the QuickFix Message API documentation here https://javadoc.io/doc/org.quickfixj/quickfixj-core/latest/index.html
