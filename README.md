@@ -74,10 +74,11 @@
 
 ## Testing
 - Create a FIX Server and FIX Client stack
-- Clone the repo https://github.com/aws-samples/amazon-resilient-fix-engine-demo
+- Clone this repo <br>
+git clone https://github.com/aws-samples/amazon-resilient-fix-engine-demo <br>
 - Login into AWS Console --> CloudFormation --> Create Stack with New resources
 - Select "Template is Ready" and "Upload a template file"
-- Click "Choose File"  and browser to FIX Engine repo folder and select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineVPCApplication.yml"
+- Click "Choose File"  and browser to FIX Engine repo folder to select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineVPCApplication.yml"
 - Enter Parameters as follows <br>
 ![Fix Server CF 1](./images/fix-server-cf-1.png)
 
@@ -118,10 +119,10 @@ export PATH=$PATH:\/opt/gradle/bin <br>
 ![MSK Brokers](./images/msk-brokers.png)
 - Repeats same steps to get server MSK broker endpoints
 - Update src/main/resources/config/test-client.cfg to update KafkaBootstrapBrokerString, NoOfMessages and WaitBetweenMessages
-KafkaBootstrapBrokerString=<fix-client-broker-1>:9092,<fix-client-broker-2>:9092
+KafkaBootstrapBrokerString="<fix-client-broker-1>:9092,<fix-client-broker-2>:9092" <br>
 NoOfMessages=30
 - Update src/main/resources/config/test-server.cfg to update KafkaBootstrapBrokerString
-KafkaBootstrapBrokerString=<fix-server-broker-1>:9092,<fix-server-broker-2>:9092
+KafkaBootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9092"
 - Create a local build if you are planning to modify code or you could use the already built jar located at build/libs/fixengineonaws.jar <br>
 cd amazon-resilient-fix-engine-demo <br>
 -- create local build, skip this step is not modifying code <br>
@@ -135,13 +136,13 @@ cd amazon-resilient-fix-engine-demo <br>
 - Open a terminal window and monitor execution reports received back by FIX Client MSK <br>
 export PS1="MSK-Client-1 >" <br>
 cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin <br>
-export BootstrapBrokerString=<<fix-client-broker-1>:9092,<fix-client-broker-2>:9092 <br>
+export BootstrapBrokerString="<fix-client-broker-1>:9092,<fix-client-broker-2>:9092" <br>
 ./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString <br>
 ./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
 - Open a terminal window and and ,onitor order received by FIX Server MSK <br>
 export PS1="MSK-Server-1 >" <br>
 cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin <br>
-export BootstrapBrokerString=<fix-server-broker-1>:9092,<fix-server-broker-2>:9092 <br>
+export BootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9092" <br>
 ./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString <br>
 ./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
 ![FIX Test Terminals](./images/fix-test-terminals.png)
