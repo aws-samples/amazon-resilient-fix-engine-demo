@@ -73,31 +73,31 @@
 - within the log group, there will be 2 log streams for primary e.g. FixEngineOnAws-Client-1-19/Primary/FixEngineOnAws...... and failover FixEngineOnAws-Client-1-19/Failover/FixEngineOnAws.......
 
 ## Testing
-- Create a Fix Server and Fix Client stack
+- Create a FIX Server and FIX Client stack
 - Clone the repo https://github.com/aws-samples/amazon-resilient-fix-engine-demo
 - Login into AWS Console --> CloudFormation --> Create Stack with New resources
 - Select "Template is Ready" and "Upload a template file"
-- Click "Choose File"  and browser to Fix Engine repo folder and select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineVPCApplication.yml"
-- Enter Parameters as follows 
-![Fix Server CF 1](fix-server-cf-1.png)
+- Click "Choose File"  and browser to FIX Engine repo folder and select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineVPCApplication.yml"
+- Enter Parameters as follows <br>
+![Fix Server CF 1](./images/fix-server-cf-1.png)
 
-![Fix Server CF 2](fix-server-cf-2.png)
+![Fix Server CF 2](./images/fix-server-cf-2.png)
 
 - Wait until the CloudFormation stack deployment is succesful. 
 - Click on output tab, note down GlobalAcceleratorDNSName and NATGatewayIPAddresses 
 
-- Once the Fix Server stack is deployed, click update and update "Fix Client CIDRs" parameter with 10.10.0.0/20, PrimaryNATGatewayEIP/32, FailoverNATGatewayEIP/32 (replace PrimaryNATGatewayEIP and FailoverNATGatewayEIP with actual IP addresses )
-![Fix Server CF 3](fix-server-cf-3.png)
+- Once the FIX Server stack is deployed, click update and update "Fix Client CIDRs" parameter with 10.10.0.0/20, PrimaryNATGatewayEIP/32, FailoverNATGatewayEIP/32 (replace PrimaryNATGatewayEIP and FailoverNATGatewayEIP with actual IP addresses ) <br>
+![Fix Server CF 3](./images/fix-server-cf-3.png)
     
 
-- Now you will be deploying the Fix client stack
+- Now you will be deploying the FIX client stack
 - Go to CloudFormation --> Create Stack with New resources
 - Select "Template is Ready" and "Upload a template file"
-- Click "Choose File"  and browser to Fix Engine repo folder and select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineApplication.yml"
-- Enter Parameters as follows, use the GlobalAcceleratorDNSName, PrimaryNATGatewayEIP and FailoverNATGatewayEIP noted down previously
-![Fix Server CF 1](fix-client-cf-1.png)
+- Click "Choose File"  and browser to FIX Engine repo folder and select file "amazon-resilient-fix-engine-demo/cloudformation/FIXEngineApplication.yml"
+- Enter Parameters as follows, use the GlobalAcceleratorDNSName, PrimaryNATGatewayEIP and FailoverNATGatewayEIP noted down previously <br>
+![Fix Server CF 1](./images/fix-client-cf-1.png)
 
-![Fix Server CF 2](fix-client-cf-2.png)
+![Fix Server CF 2](./images/fix-client-cf-2.png)
 
 - Wait until the CloudFormation stack deployment is succesful. 
 
@@ -114,8 +114,8 @@ sudo ln -s /opt/gradle-6.6.1 /opt/gradle <br>
 - Update .bash_profile to add below <br> 
 export GRADLE_HOME=/opt/gradle <br>
 export PATH=$PATH:\/opt/gradle/bin <br>
-- Get MSK broker endpoint for both server and client MSK. Go to MSK, client client MSK and note down the broker endpoints
-![MSK Brokers](msk-brokers.png)
+- Get MSK broker endpoint for both server and client MSK. Go to MSK, client client MSK and note down the broker endpoints <br>
+![MSK Brokers](./images/msk-brokers.png)
 - Repeats same steps to get server MSK broker endpoints
 - Update src/main/resources/config/test-client.cfg to update KafkaBootstrapBrokerString, NoOfMessages and WaitBetweenMessages
 KafkaBootstrapBrokerString=<fix-client-broker-1>:9092,<fix-client-broker-2>:9092
@@ -124,7 +124,7 @@ NoOfMessages=30
 KafkaBootstrapBrokerString=<fix-server-broker-1>:9092,<fix-server-broker-2>:9092
 - Create a local build if you are planning to modify code or you could use the already built jar located at build/libs/fixengineonaws.jar <br>
 cd amazon-resilient-fix-engine-demo <br>
--- create local build, skip this step is not modifying code. 
+-- create local build, skip this step is not modifying code <br>
 gradle build <br> 
 - Open a terminal window and run the test client on FIX Server side <br>
 cd amazon-resilient-fix-engine-demo <br>
@@ -144,6 +144,8 @@ cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin <br>
 export BootstrapBrokerString=<fix-server-broker-1>:9092,<fix-server-broker-2>:9092 <br>
 ./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString <br>
 ./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
+![FIX Test Terminals](./images/fix-test-terminals.png)
+
 
 ## API Documentation
 - You can find the QuickFix Message API documentation here https://javadoc.io/doc/org.quickfixj/quickfixj-core/latest/index.html
