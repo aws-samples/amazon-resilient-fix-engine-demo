@@ -73,6 +73,18 @@
                 }
             ]
         },
+        "SendLogsToS3": {
+            "Fn::Not": [
+                {
+                    "Fn::Equals": [
+                        "",
+                        {
+                            "Ref": "S3LogsBucket"
+                        }
+                    ]
+                }
+            ]
+        },
         "UseDefaultImage": {
             "Fn::Equals": [
                 "",
@@ -133,10 +145,13 @@
                 },
                 {
                     "Label": {
-                        "default": "Monitoring & Alerting"
+                        "default": "Logging, Monitoring & Alerting"
                     },
                     "Parameters": [
-                        "SNSTopicArn"
+                        "S3LogsBucket",
+                        "S3LogsBucketPrefix",
+                        "SNSTopicArn",
+                        "LogRetentionInDays"
                     ]
                 }
             ],
@@ -168,6 +183,9 @@
                 "HostedZoneID": {
                     "default": "Hosted Zone"
                 },
+                "LogRetentionInDays": {
+                    "default": "Log Retention in Days"
+                },
                 "PrimaryPrivateSubnet": {
                     "default": "Primary Private Subnet"
                 },
@@ -179,6 +197,12 @@
                 },
                 "PrimaryPublicSubnetCIDR": {
                     "default": "Primary Public Subnet CIDR"
+                },
+                "S3LogsBucket": {
+                    "default": "Logs Bucket"
+                },
+                "S3LogsBucketPrefix": {
+                    "default": "Logs Bucket Prefix"
                 },
                 "SNSTopicArn": {
                     "default": "Target SNS Topic"
@@ -196,9 +220,9 @@
         },
         "Comments": "FIX Engine on AWS POC",
         "CreatedBy": "Carter Meyers",
-        "Description": "FIXEngineOnAWS - v1.33",
-        "LastUpdated": "June 19, 2021",
-        "Version": "v1.33"
+        "Description": "FIXEngineOnAWS - v1.34",
+        "LastUpdated": "July 13, 2021",
+        "Version": "v1.34"
     },
     "Outputs": {
         "ApplicationID": {
@@ -241,6 +265,22 @@
             "Condition": "",
             "Value": {
                 "Ref": "FIXVersion"
+            }
+        },
+        "FIXVersionInt": {
+            "Condition": "",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    {
+                        "Fn::Split": [
+                            ".",
+                            {
+                                "Ref": "FIXVersion"
+                            }
+                        ]
+                    }
+                ]
             }
         },
         "FailoverMSKEndpoint": {
@@ -368,7 +408,7 @@
             "Type": "String"
         },
         "FIXClientCIDRs": {
-            "Default": "0.0.0.0/0",
+            "Default": "10.10.0.0/20",
             "Description": "The comma-delimited external CIDR ranges that should be granted access to your ingestion endpoint. (Max. 5)",
             "Type": "CommaDelimitedList"
         },
@@ -385,7 +425,15 @@
             "Type": "Number"
         },
         "FIXVersion": {
-            "Default": "42",
+            "AllowedValues": [
+                "4.0",
+                "4.1",
+                "4.2",
+                "4.3",
+                "4.4",
+                "5.0"
+            ],
+            "Default": "4.2",
             "Description": "The desired FIX engine version.",
             "Type": "String"
         },
@@ -407,8 +455,24 @@
                 "true",
                 "false"
             ],
-            "Default": "true",
+            "Default": "false",
             "Description": "Choose True to enable TLS encryption for your Kafka connection",
+            "Type": "String"
+        },
+        "LogRetentionInDays": {
+            "AllowedValues": [
+                "1",
+                "7",
+                "14",
+                "30",
+                "60",
+                "90",
+                "120",
+                "180",
+                "365"
+            ],
+            "Default": "30",
+            "Description": "The number of days CloudWatch-bound application logs should be kept.",
             "Type": "String"
         },
         "PrimaryPrivateSubnet": {
@@ -418,6 +482,16 @@
         "PrimaryPublicSubnet": {
             "Description": "The public subnet you wish to use for your primary Network Load Balancer.",
             "Type": "AWS::EC2::Subnet::Id"
+        },
+        "S3LogsBucket": {
+            "Default": "",
+            "Description": "[Optional] The S3 Bucket you wish to use for S3-bound application logs (e.g., Network Load Balancer). Please ensure your bucket policy is configured to allow delivery from your NLBs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html#access-logging-bucket-permissions",
+            "Type": "String"
+        },
+        "S3LogsBucketPrefix": {
+            "Default": "hello",
+            "Description": "[Optional] The S3 Key prefix you wish to use for S3-bound application logs.",
+            "Type": "String"
         },
         "SNSTopicArn": {
             "Default": "",
@@ -435,7 +509,7 @@
             "Type": "String"
         },
         "UserApplicationCIDRs": {
-            "Default": "0.0.0.0/0",
+            "Default": "10.10.0.0/20",
             "Description": "The comma-delimited private CIDR ranges corresponding to the user application that should be granted access to your MSK endpoint. (Max. 5)",
             "Type": "CommaDelimitedList"
         },
@@ -485,6 +559,20 @@
             "DependsOn": [
                 "AutomationDocumentStarterRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\nssm_client = boto3.client('ssm')\n\ndef start_document(properties):\n    \n    try:\n        \n        response = ssm_client.start_automation_execution(\n            Parameters = {\n                'ExecutionRoleArn': [\n                    properties['ExecutionRoleArn']\n                ]\n            },\n            DocumentName = properties['AutomationDocumentName'],\n        )\n    \n        return True\n    \n    except ClientError as e:\n        print(str(e)); return False\n\n'''\n    - ExecutionRoleArn | str\n    - EligibleRequestTypes | list\n    - AutomationDocumentName | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n    \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if 'EligibleRequestTypes' not in properties:\n        properties['EligibleRequestTypes'] = ['Create']\n    \n    if event['RequestType'] in properties['EligibleRequestTypes']:\n        \n        attempt_cnt = 0\n        while attempt_cnt < 5:\n            \n            if attempt_cnt > 0:\n                time.sleep(10)\n            \n            if start_document(properties) is True:\n                return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['AutomationDocumentName'])\n        \n            attempt_cnt += 1\n            \n        return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType'] not in properties['EligibleRequestTypes']:\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
@@ -530,13 +618,16 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
         "AutomationDocumentStarterRole": {
             "Condition": "",
             "DependsOn": [],
+            "Metadata": {},
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -674,6 +765,16 @@
             "DependsOn": [
                 "StackNameManipulator"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W28",
+                            "reason": "ECR does not allow capital letters in repository names which is why we must sanitize/lowercase the auto-generated name."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "ImageScanningConfiguration": {
                     "ScanOnPush": true
@@ -950,7 +1051,56 @@
                                     ],
                                     "Effect": "Allow",
                                     "Resource": [
-                                        "*"
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    "::image/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":subnet/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":security-group/",
+                                                    {
+                                                        "Fn::GetAtt": [
+                                                            "MSKClusterPrepSecurityGroup",
+                                                            "GroupId"
+                                                        ]
+                                                    }
+                                                ]
+                                            ]
+                                        }
                                     ]
                                 },
                                 {
@@ -991,6 +1141,16 @@
                 "ECRRepository",
                 "ECSImageBuildLogGroup"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W11",
+                            "reason": "ecr:GetAuthorizationToken does not support resource filtering."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -1128,7 +1288,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -1161,7 +1323,6 @@
                             ],
                             "Effect": "Allow",
                             "Resource": [
-                                "*",
                                 {
                                     "Fn::Join": [
                                         "",
@@ -1178,7 +1339,7 @@
                                             {
                                                 "Ref": "ECSImageBuildDocument"
                                             },
-                                            ":1}"
+                                            ":$DEFAULT"
                                         ]
                                     ]
                                 }
@@ -1197,15 +1358,32 @@
         },
         "ECSImageBuildSecurityGroup": {
             "DependsOn": [],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W5",
+                            "reason": "Outbound HTTP(S) traffic is required to download third-party dependencies."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "GroupDescription": "Security Group for EC2 Instances Launched via SSM Automation",
                 "SecurityGroupEgress": [
                     {
                         "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All Outbound Traffic",
-                        "FromPort": 1,
+                        "Description": "All HTTP Traffic",
+                        "FromPort": 80,
                         "IpProtocol": "tcp",
-                        "ToPort": 65535
+                        "ToPort": 80
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "Allow All HTTPS Traffic",
+                        "FromPort": 443,
+                        "IpProtocol": "tcp",
+                        "ToPort": 443
                     }
                 ],
                 "VpcId": {
@@ -1239,7 +1417,7 @@
                     "RepositoryName": {
                         "Ref": "ECRRepository"
                     },
-                    "TemplateVersion": "1.33"
+                    "TemplateVersion": "1.34"
                 },
                 "ServiceToken": {
                     "Fn::GetAtt": [
@@ -1293,6 +1471,20 @@
             "DependsOn": [
                 "ECSImageRemoverRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - RepositoryName | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if event['RequestType'] in ['Delete']:\n        \n        ecr_client = boto3.client('ecr')\n\n        try:\n            \n            existing_images = ecr_client.describe_images(\n                repositoryName = properties['RepositoryName']\n            )\n            \n            if len(existing_images['imageDetails']) > 0:\n                \n                images_to_delete = []\n                for image in existing_images['imageDetails']:\n                    \n                    images_to_delete.append({\n                        'imageDigest': image['imageDigest']\n                    })\n                    \n                ecr_client.batch_delete_image(\n                    repositoryName = properties['RepositoryName'],\n                    imageIds = images_to_delete\n                )\n                \n            return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['RepositoryName'])\n            \n        except ClientError as e:\n        \n            print(str(e))\n            return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType'] in ['Create', 'Update']:\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
@@ -1338,7 +1530,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -1347,6 +1541,7 @@
             "DependsOn": [
                 "ECRRepository"
             ],
+            "Metadata": {},
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -1521,6 +1716,51 @@
                 "Type": "String",
                 "Value": {
                     "Ref": "FIXServerPort"
+                }
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
+        "FIXVersionIntParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "FIX engine version as integer for ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "FIXVersionInt"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": {
+                    "Fn::Join": [
+                        "",
+                        {
+                            "Fn::Split": [
+                                ".",
+                                {
+                                    "Ref": "FIXVersion"
+                                }
+                            ]
+                        }
+                    ]
                 }
             },
             "Type": "AWS::SSM::Parameter"
@@ -1961,6 +2201,33 @@
             "DependsOn": [],
             "Properties": {
                 "IpAddressType": "ipv4",
+                "LoadBalancerAttributes": {
+                    "Fn::If": [
+                        "SendLogsToS3",
+                        [
+                            {
+                                "Key": "access_logs.s3.enabled",
+                                "Value": "true"
+                            },
+                            {
+                                "Key": "access_logs.s3.bucket",
+                                "Value": {
+                                    "Ref": "S3LogsBucket"
+                                }
+                            },
+                            {
+                                "Key": "access_logs.s3.prefix",
+                                "Value": ""
+                            }
+                        ],
+                        [
+                            {
+                                "Key": "access_logs.s3.enabled",
+                                "Value": "false"
+                            }
+                        ]
+                    ]
+                },
                 "Scheme": "internet-facing",
                 "Subnets": [
                     {
@@ -2082,7 +2349,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -2095,7 +2364,7 @@
                 "SecurityGroupEgress": [
                     {
                         "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All Outbound Traffic",
+                        "Description": "Allow All TCP Traffic",
                         "FromPort": 1,
                         "IpProtocol": "tcp",
                         "ToPort": 65535
@@ -2563,6 +2832,20 @@
             "DependsOn": [
                 "GlobalAcceleratorInfoRetrieverRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - AcceleratorArn | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if event['RequestType'] in ['Create', 'Update']:\n\n        accelerator_client = boto3.client('globalaccelerator', region_name = 'us-west-2')\n\n        try:\n\n            response = accelerator_client.describe_accelerator(\n                AcceleratorArn = properties['AcceleratorArn']\n            )\n\n            if 'Accelerator' not in response:\n\n                return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n\n            else:\n\n                responseData['IPAddresses'] = ','.join(response['Accelerator']['IpSets'][0]['IpAddresses'])\n                return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['AcceleratorArn'])\n\n        except ClientError as e:\n            print(str(e))\n            return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n            \n    elif event['RequestType'] in ['Delete']:\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
@@ -2608,7 +2891,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -2617,6 +2902,7 @@
             "DependsOn": [
                 "GlobalAccelerator"
             ],
+            "Metadata": {},
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -2828,6 +3114,20 @@
             "DependsOn": [
                 "MSKClusterInfoRetrieverRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - ClusterARN | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if operation == 'GetMSKClusterInfo':\n        \n        if event['RequestType'] in ['Create', 'Update']:\n        \n            msk_client = boto3.client('kafka')\n        \n            try:\n        \n                nodes = msk_client.list_nodes(\n                    ClusterArn = properties['ClusterARN']\n                )\n        \n                if 'NodeInfoList' not in nodes or len(nodes['NodeInfoList']) == 0:\n        \n                    return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n        \n                else:\n        \n                    for node in nodes['NodeInfoList']:\n        \n                        if node['BrokerNodeInfo']['BrokerId'] == 1:\n        \n                            responseData['PrimaryEndpoint'] = node['BrokerNodeInfo']['Endpoints'][0]\n        \n                        else:\n        \n                            responseData['FailoverEndpoint'] = node['BrokerNodeInfo']['Endpoints'][0]\n        \n                    return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['ClusterARN'])\n        \n            except ClientError as e:\n                \n                print(str(e))\n                return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n        \n        elif event['RequestType'] in ['Delete']:\n        \n            return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
@@ -2873,7 +3173,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -2882,6 +3184,7 @@
             "DependsOn": [
                 "MSKCluster"
             ],
+            "Metadata": {},
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -3040,7 +3343,56 @@
                                     ],
                                     "Effect": "Allow",
                                     "Resource": [
-                                        "*"
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    "::image/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":subnet/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":security-group/",
+                                                    {
+                                                        "Fn::GetAtt": [
+                                                            "MSKClusterPrepSecurityGroup",
+                                                            "GroupId"
+                                                        ]
+                                                    }
+                                                ]
+                                            ]
+                                        }
                                     ]
                                 },
                                 {
@@ -3202,7 +3554,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -3235,7 +3589,6 @@
                             ],
                             "Effect": "Allow",
                             "Resource": [
-                                "*",
                                 {
                                     "Fn::Join": [
                                         "",
@@ -3252,7 +3605,7 @@
                                             {
                                                 "Ref": "MSKInitializationDocument"
                                             },
-                                            ":1}"
+                                            ":$DEFAULT"
                                         ]
                                     ]
                                 }
@@ -3276,7 +3629,7 @@
                 "SecurityGroupEgress": [
                     {
                         "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All Outbound Traffic",
+                        "Description": "Allow All TCP Traffic",
                         "FromPort": 1,
                         "IpProtocol": "tcp",
                         "ToPort": 65535
@@ -3297,11 +3650,11 @@
                 "GroupDescription": "Security Group for MSK Cluster",
                 "SecurityGroupEgress": [
                     {
-                        "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All Outbound Traffic",
+                        "CidrIp": "0.0.0.0/32",
+                        "Description": "Deny All Traffic",
                         "FromPort": 1,
                         "IpProtocol": "tcp",
-                        "ToPort": 65535
+                        "ToPort": 1
                     }
                 ],
                 "SecurityGroupIngress": [
@@ -3582,6 +3935,20 @@
             "DependsOn": [
                 "MiscMethodsHandlerRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    response_data = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if event['RequestType'] in ['Create', 'Update']:\n        \n        if operation == 'ManipulateString':\n            \n            action = properties['Action']\n            input_str = properties['InputString']\n            \n            if action == 'lower':\n                sanitized_str = input_str.lower()\n                \n            elif action == 'upper':\n                sanitized_str = input_str.upper()\n                \n            response_data['OutputString'] = sanitized_str\n            return cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, sanitized_str)\n                \n    elif event['RequestType'] in ['Delete']:\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)"
@@ -3627,13 +3994,16 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
         "MiscMethodsHandlerRole": {
             "Condition": "",
             "DependsOn": [],
+            "Metadata": {},
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [
@@ -4058,6 +4428,33 @@
             "DependsOn": [],
             "Properties": {
                 "IpAddressType": "ipv4",
+                "LoadBalancerAttributes": {
+                    "Fn::If": [
+                        "SendLogsToS3",
+                        [
+                            {
+                                "Key": "access_logs.s3.enabled",
+                                "Value": "true"
+                            },
+                            {
+                                "Key": "access_logs.s3.bucket",
+                                "Value": {
+                                    "Ref": "S3LogsBucket"
+                                }
+                            },
+                            {
+                                "Key": "access_logs.s3.prefix",
+                                "Value": ""
+                            }
+                        ],
+                        [
+                            {
+                                "Key": "access_logs.s3.enabled",
+                                "Value": "false"
+                            }
+                        ]
+                    ]
+                },
                 "Scheme": "internet-facing",
                 "Subnets": [
                     {
@@ -4264,7 +4661,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -4447,7 +4846,56 @@
                                     ],
                                     "Effect": "Allow",
                                     "Resource": [
-                                        "*"
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    "::image/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":subnet/*"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "arn:aws:ec2:",
+                                                    {
+                                                        "Ref": "AWS::Region"
+                                                    },
+                                                    ":",
+                                                    {
+                                                        "Ref": "AWS::AccountId"
+                                                    },
+                                                    ":security-group/",
+                                                    {
+                                                        "Fn::GetAtt": [
+                                                            "MSKClusterPrepSecurityGroup",
+                                                            "GroupId"
+                                                        ]
+                                                    }
+                                                ]
+                                            ]
+                                        }
                                     ]
                                 },
                                 {
@@ -4613,7 +5061,9 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
@@ -4646,7 +5096,6 @@
                             ],
                             "Effect": "Allow",
                             "Resource": [
-                                "*",
                                 {
                                     "Fn::Join": [
                                         "",
@@ -4663,7 +5112,7 @@
                                             {
                                                 "Ref": "RDSInitializationDocument"
                                             },
-                                            ":1}"
+                                            ":$DEFAULT"
                                         ]
                                     ]
                                 }
@@ -4734,11 +5183,11 @@
                 },
                 "SecurityGroupEgress": [
                     {
-                        "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All Outbound Traffic",
+                        "CidrIp": "0.0.0.0/32",
+                        "Description": "Deny All Traffic",
                         "FromPort": 1,
                         "IpProtocol": "tcp",
-                        "ToPort": 65535
+                        "ToPort": 1
                     }
                 ],
                 "SecurityGroupIngress": [
@@ -5420,6 +5869,20 @@
             "DependsOn": [
                 "VPCPrefixListManagerRole"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W89",
+                            "reason": "This function is only invoked during the deployment of this solution, potentially PRIOR to the creation of a VPC, and is never used again."
+                        },
+                        {
+                            "id": "W92",
+                            "reason": "This function is only invoked during the deployment of this solution and is never used again. Reserving concurrency would therefore be wasteful."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Code": {
                     "ZipFile": "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - PrefixListId | str\n    - AuthorizedCidrs | list\n    - EntryDescription | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    # If the Stack is Being Created or Updated\n    if event['RequestType'] in ['Create', 'Update']:\n        \n        ec2_client = boto3.client('ec2')\n        \n        try:\n            \n            prefix_list = ec2_client.describe_managed_prefix_lists(\n                PrefixListIds = [\n                    properties['PrefixListId']\n                ]\n            )\n            \n            if len(prefix_list['PrefixLists']) == 0:\n                print('Prefix List w/ ID: ' + properties['PrefixListId'] + ' Could Not be Found')\n                return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n                \n            else:\n                prefix_list = prefix_list['PrefixLists'][0]\n                \n            existing_entries = ec2_client.get_managed_prefix_list_entries(\n                PrefixListId = prefix_list['PrefixListId'],\n            )\n        \n        except ClientError as e:\n            print(str(e))\n            return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n            \n        new_entries = properties['AuthorizedCidrs']\n        \n        entries_to_add = []\n        entries_to_remove = []\n        \n        # If There Are Existing Entries\n        if len(existing_entries['Entries']) > 0:\n            \n            # For Each Existing Entry\n            for existing_entry in existing_entries['Entries']:\n                \n                # If the CIDR is No Longer Authorized\n                if existing_entry['Cidr'] not in new_entries:\n                    \n                    # We'll Queue it for Removal\n                    entries_to_remove.append({\n                        'Cidr': existing_entry['Cidr']\n                    })\n                \n                # Else, We'll Remove it from our \"New Entries\" List\n                else:\n                    new_entries.remove(existing_entry['Cidr'])\n        \n        # For Each New Entry Remaining\n        for new_entry in new_entries:\n            \n            # We'll Format its Input\n            entries_to_add.append({\n                'Cidr': new_entry,\n                'Description': properties['EntryDescription'],\n            })\n        \n        # If There's at Least 1 Entry to Add or Remove\n        if len(entries_to_add) > 0 or len(entries_to_remove) > 0:\n            \n            try:\n                \n                # We'll Try to Update the List\n                ec2_client.modify_managed_prefix_list(\n                    PrefixListId = prefix_list['PrefixListId'],\n                    CurrentVersion = prefix_list['Version'],\n                    AddEntries = entries_to_add,\n                    RemoveEntries = entries_to_remove,\n                )\n                \n            except ClientError as e:\n                print(str(e))\n                return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['PrefixListId'])\n    \n    # If the Stack is Being Deleted   \n    elif event['RequestType'] in ['Delete']:\n        \n        # CFN Can Delete Prefix Lists Containing Entries, So There's Nothing For Us to Do\n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
@@ -5465,13 +5928,25 @@
                         ]
                     ]
                 },
-                "RetentionInDays": 30
+                "RetentionInDays": {
+                    "Ref": "LogRetentionInDays"
+                }
             },
             "Type": "AWS::Logs::LogGroup"
         },
         "VPCPrefixListManagerRole": {
             "Condition": "",
             "DependsOn": [],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W11",
+                            "reason": "ec2:DescribeManagedPrefixLists does not support resource filtering."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "AssumeRolePolicyDocument": {
                     "Statement": [

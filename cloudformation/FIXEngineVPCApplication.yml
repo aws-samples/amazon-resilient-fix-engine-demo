@@ -24,6 +24,10 @@ Conditions:
   KafkaTLSEnabled: !Equals
     - 'true'
     - !Ref 'KafkaConnTLS'
+  SendLogsToS3: !Not
+    - !Equals
+      - ''
+      - !Ref 'S3LogsBucket'
   UseDefaultImage: !Equals
     - ''
     - !Ref 'CustomImagePath'
@@ -61,9 +65,12 @@ Metadata:
           - HostedZoneID
           - FIXServerDNSName
       - Label:
-          default: Monitoring & Alerting
+          default: Logging, Monitoring & Alerting
         Parameters:
+          - S3LogsBucket
+          - S3LogsBucketPrefix
           - SNSTopicArn
+          - LogRetentionInDays
     ParameterLabels:
       CustomImagePath:
         default: Image Path
@@ -83,6 +90,8 @@ Metadata:
         default: Failover Public Subnet CIDR
       HostedZoneID:
         default: Hosted Zone
+      LogRetentionInDays:
+        default: Log Retention in Days
       PrimaryPrivateSubnet:
         default: Primary Private Subnet
       PrimaryPrivateSubnetCIDR:
@@ -91,6 +100,10 @@ Metadata:
         default: Primary Public Subnet
       PrimaryPublicSubnetCIDR:
         default: Primary Public Subnet CIDR
+      S3LogsBucket:
+        default: Logs Bucket
+      S3LogsBucketPrefix:
+        default: Logs Bucket Prefix
       SNSTopicArn:
         default: Target SNS Topic
       UserApplicationCIDRs:
@@ -101,9 +114,9 @@ Metadata:
         default: VPC CIDR
   Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.33
-  LastUpdated: June 19, 2021
-  Version: v1.33
+  Description: FIXEngineOnAWS - v1.34
+  LastUpdated: July 13, 2021
+  Version: v1.34
 Outputs:
   ApplicationID:
     Condition: ''
@@ -126,6 +139,13 @@ Outputs:
   FIXVersion:
     Condition: ''
     Value: !Ref 'FIXVersion'
+  FIXVersionInt:
+    Condition: ''
+    Value: !Join
+      - ''
+      - !Split
+        - .
+        - !Ref 'FIXVersion'
   FailoverMSKEndpoint:
     Condition: ''
     Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
@@ -199,7 +219,7 @@ Parameters:
     Description: ''
     Type: String
   FIXClientCIDRs:
-    Default: '0.0.0.0/0'
+    Default: 10.10.0.0/20
     Description: The comma-delimited external CIDR ranges that should be granted access
       to your ingestion endpoint. (Max. 5)
     Type: CommaDelimitedList
@@ -215,7 +235,14 @@ Parameters:
     MinValue: 1
     Type: Number
   FIXVersion:
-    Default: '42'
+    AllowedValues:
+      - '4.0'
+      - '4.1'
+      - '4.2'
+      - '4.3'
+      - '4.4'
+      - '5.0'
+    Default: '4.2'
     Description: The desired FIX engine version.
     Type: String
   FailoverPrivateSubnetCIDR:
@@ -235,8 +262,22 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
-    Default: 'true'
+    Default: 'false'
     Description: Choose True to enable TLS encryption for your Kafka connection
+    Type: String
+  LogRetentionInDays:
+    AllowedValues:
+      - '1'
+      - '7'
+      - '14'
+      - '30'
+      - '60'
+      - '90'
+      - '120'
+      - '180'
+      - '365'
+    Default: '30'
+    Description: The number of days CloudWatch-bound application logs should be kept.
     Type: String
   PrimaryPrivateSubnetCIDR:
     Default: 10.10.4.0/23
@@ -245,6 +286,18 @@ Parameters:
   PrimaryPublicSubnetCIDR:
     Default: 10.10.0.0/23
     Description: The CIDR range you wish to use for your primary public subnet.
+    Type: String
+  S3LogsBucket:
+    Default: ''
+    Description: >-
+      [Optional] The S3 Bucket you wish to use for S3-bound application logs (e.g.,
+      Network Load Balancer). Please ensure your bucket policy is configured to allow
+      delivery from your NLBs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html#access-logging-bucket-permissions
+    Type: String
+  S3LogsBucketPrefix:
+    Default: hello
+    Description: '[Optional] The S3 Key prefix you wish to use for S3-bound application
+      logs.'
     Type: String
   SNSTopicArn:
     Default: ''
@@ -260,7 +313,7 @@ Parameters:
     Description: Computer ID used to initiate FIX communication
     Type: String
   UserApplicationCIDRs:
-    Default: '0.0.0.0/0'
+    Default: 10.10.0.0/20
     Description: The comma-delimited private CIDR ranges corresponding to the user
       application that should be granted access to your MSK endpoint. (Max. 5)
     Type: CommaDelimitedList
@@ -290,6 +343,15 @@ Resources:
     Condition: ''
     DependsOn:
       - AutomationDocumentStarterRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\n\
@@ -337,11 +399,12 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'AutomationDocumentStarterFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   AutomationDocumentStarterRole:
     Condition: ''
     DependsOn: []
+    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -439,6 +502,12 @@ Resources:
   ECRRepository:
     DependsOn:
       - StackNameManipulator
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: ECR does not allow capital letters in repository names which is
+              why we must sanitize/lowercase the auto-generated name.
     Properties:
       ImageScanningConfiguration:
         ScanOnPush: true
@@ -596,7 +665,26 @@ Resources:
                   - ec2:RunInstances
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ::image/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :subnet/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :security-group/
+                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -613,6 +701,11 @@ Resources:
     DependsOn:
       - ECRRepository
       - ECSImageBuildLogGroup
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: ecr:GetAuthorizationToken does not support resource filtering.
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -683,7 +776,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - ECSImageBuild
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   ECSImageBuildPolicy:
     DependsOn:
@@ -702,7 +795,6 @@ Resources:
               - ssm:StartAutomationExecution
             Effect: Allow
             Resource:
-              - '*'
               - !Join
                 - ''
                 - - 'arn:aws:ssm:'
@@ -711,7 +803,7 @@ Resources:
                   - !Ref 'AWS::AccountId'
                   - :automation-definition/
                   - !Ref 'ECSImageBuildDocument'
-                  - :1}
+                  - :$DEFAULT
       PolicyName: ECSImageBuildPolicy
       Roles:
         - !Ref 'AutomationDocumentStarterRole'
@@ -720,14 +812,24 @@ Resources:
     DependsOn:
       - VPC
       - PrimaryPrivateSubnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
     Properties:
       GroupDescription: Security Group for EC2 Instances Launched via SSM Automation
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/0'
-          Description: Allow All Outbound Traffic
-          FromPort: 1
+          Description: All HTTP Traffic
+          FromPort: 80
           IpProtocol: tcp
-          ToPort: 65535
+          ToPort: 80
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All HTTPS Traffic
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
   ECSImageBuildStarter:
@@ -744,7 +846,7 @@ Resources:
           - Update
         ExecutionRoleArn: !GetAtt 'ECSImageBuildExecutionRole.Arn'
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.33'
+        TemplateVersion: '1.34'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -774,6 +876,15 @@ Resources:
     Condition: ''
     DependsOn:
       - ECSImageRemoverRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
@@ -820,12 +931,13 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'ECSImageRemoverFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   ECSImageRemoverRole:
     Condition: ''
     DependsOn:
       - ECRRepository
+    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -911,6 +1023,27 @@ Resources:
       Tier: Standard
       Type: String
       Value: !Ref 'FIXServerPort'
+    Type: AWS::SSM::Parameter
+  FIXVersionIntParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'FIX engine version as integer for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - FIXVersionInt
+      Tier: Standard
+      Type: String
+      Value: !Join
+        - ''
+        - !Split
+          - .
+          - !Ref 'FIXVersion'
     Type: AWS::SSM::Parameter
   FIXVersionParam:
     Condition: ''
@@ -1132,6 +1265,16 @@ Resources:
       - FailoverPublicSubnet
     Properties:
       IpAddressType: ipv4
+      LoadBalancerAttributes: !If
+        - SendLogsToS3
+        - - Key: access_logs.s3.enabled
+            Value: 'true'
+          - Key: access_logs.s3.bucket
+            Value: !Ref 'S3LogsBucket'
+          - Key: access_logs.s3.prefix
+            Value: ''
+        - - Key: access_logs.s3.enabled
+            Value: 'false'
       Scheme: internet-facing
       Subnets:
         - !Ref 'FailoverPublicSubnet'
@@ -1278,7 +1421,7 @@ Resources:
         - ''
         - - /aws/ecs/fargate/
           - !Ref 'AWS::StackName'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   FargateSecurityGroup:
     DependsOn:
@@ -1289,7 +1432,7 @@ Resources:
       GroupDescription: Security Group for Fargate Tasks
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/0'
-          Description: Allow All Outbound Traffic
+          Description: Allow All TCP Traffic
           FromPort: 1
           IpProtocol: tcp
           ToPort: 65535
@@ -1388,6 +1531,39 @@ Resources:
       Roles:
         - !Ref 'FargateTaskRole'
     Type: AWS::IAM::Policy
+  FlowLogRole:
+    DependsOn:
+      - VPC
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - vpc-flow-logs.amazonaws.com
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Effect: Allow
+                Resource:
+                  - !Join
+                    - ''
+                    - - 'arn:aws:logs:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :log-group:/aws/vpc/
+                      - !Ref 'VPC'
+                      - /flows/*
+          PolicyName: send-flow-logs-to-cloudwatch
+    Type: AWS::IAM::Role
   GlobalAccelerator:
     Condition: IsAcceptorStack
     Properties:
@@ -1506,6 +1682,15 @@ Resources:
     Condition: IsAcceptorStack
     DependsOn:
       - GlobalAcceleratorInfoRetrieverRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
@@ -1548,12 +1733,13 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'GlobalAcceleratorInfoRetrieverFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   GlobalAcceleratorInfoRetrieverRole:
     Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
+    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1681,6 +1867,15 @@ Resources:
     Condition: ''
     DependsOn:
       - MSKClusterInfoRetrieverRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
@@ -1730,12 +1925,13 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'MSKClusterInfoRetrieverFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   MSKClusterInfoRetrieverRole:
     Condition: ''
     DependsOn:
       - MSKCluster
+    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1826,7 +2022,26 @@ Resources:
                   - ec2:RunInstances
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ::image/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :subnet/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :security-group/
+                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -1904,7 +2119,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - MSKPrepAutomation
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   MSKClusterPrepPolicy:
     DependsOn:
@@ -1923,7 +2138,6 @@ Resources:
               - ssm:StartAutomationExecution
             Effect: Allow
             Resource:
-              - '*'
               - !Join
                 - ''
                 - - 'arn:aws:ssm:'
@@ -1932,7 +2146,7 @@ Resources:
                   - !Ref 'AWS::AccountId'
                   - :automation-definition/
                   - !Ref 'MSKInitializationDocument'
-                  - :1}
+                  - :$DEFAULT
       PolicyName: MSKClusterPrepPolicy
       Roles:
         - !Ref 'AutomationDocumentStarterRole'
@@ -1945,7 +2159,7 @@ Resources:
       GroupDescription: Security Group for MSK Cluster Prep
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/0'
-          Description: Allow All Outbound Traffic
+          Description: Allow All TCP Traffic
           FromPort: 1
           IpProtocol: tcp
           ToPort: 65535
@@ -1960,11 +2174,11 @@ Resources:
     Properties:
       GroupDescription: Security Group for MSK Cluster
       SecurityGroupEgress:
-        - CidrIp: '0.0.0.0/0'
-          Description: Allow All Outbound Traffic
+        - CidrIp: '0.0.0.0/32'
+          Description: Deny All Traffic
           FromPort: 1
           IpProtocol: tcp
-          ToPort: 65535
+          ToPort: 1
       SecurityGroupIngress:
         - Description: MSK Access for Private User App Ranges
           FromPort: !If
@@ -2123,6 +2337,15 @@ Resources:
     Condition: ''
     DependsOn:
       - MiscMethodsHandlerRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport logging\nimport cfnresponse\nfrom botocore.exceptions\
@@ -2160,11 +2383,12 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'MiscMethodsHandlerFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   MiscMethodsHandlerRole:
     Condition: ''
     DependsOn: []
+    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -2401,6 +2625,16 @@ Resources:
       - PrimaryPublicSubnet
     Properties:
       IpAddressType: ipv4
+      LoadBalancerAttributes: !If
+        - SendLogsToS3
+        - - Key: access_logs.s3.enabled
+            Value: 'true'
+          - Key: access_logs.s3.bucket
+            Value: !Ref 'S3LogsBucket'
+          - Key: access_logs.s3.prefix
+            Value: ''
+        - - Key: access_logs.s3.enabled
+            Value: 'false'
       Scheme: internet-facing
       Subnets:
         - !Ref 'PrimaryPublicSubnet'
@@ -2620,7 +2854,7 @@ Resources:
         - - /aws/rds/cluster
           - !Ref 'RDSCluster'
           - error
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   RDSClusterInitializationStarter:
     DependsOn:
@@ -2724,7 +2958,26 @@ Resources:
                   - ec2:RunInstances
                 Effect: Allow
                 Resource:
-                  - '*'
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ::image/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :subnet/*
+                  - !Join
+                    - ''
+                    - - 'arn:aws:ec2:'
+                      - !Ref 'AWS::Region'
+                      - ':'
+                      - !Ref 'AWS::AccountId'
+                      - :security-group/
+                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -2804,7 +3057,7 @@ Resources:
         - - /aws/ssm
           - !Ref 'AWS::StackName'
           - RDSPrepAutomation
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   RDSClusterPrepPolicy:
     DependsOn:
@@ -2823,7 +3076,6 @@ Resources:
               - ssm:StartAutomationExecution
             Effect: Allow
             Resource:
-              - '*'
               - !Join
                 - ''
                 - - 'arn:aws:ssm:'
@@ -2832,7 +3084,7 @@ Resources:
                   - !Ref 'AWS::AccountId'
                   - :automation-definition/
                   - !Ref 'RDSInitializationDocument'
-                  - :1}
+                  - :$DEFAULT
       PolicyName: RDSClusterPrepPolicy
       Roles:
         - !Ref 'AutomationDocumentStarterRole'
@@ -2866,11 +3118,11 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' RDS Cluster'
       SecurityGroupEgress:
-        - CidrIp: '0.0.0.0/0'
-          Description: Allow All Outbound Traffic
+        - CidrIp: '0.0.0.0/32'
+          Description: Deny All Traffic
           FromPort: 1
           IpProtocol: tcp
-          ToPort: 65535
+          ToPort: 1
       SecurityGroupIngress:
         - Description: Fargate Task
           FromPort: 3306
@@ -3156,6 +3408,42 @@ Resources:
         long_query_time: 5
         slow_query_log: 1
     Type: AWS::RDS::DBParameterGroup
+  RejectFlowLog:
+    DependsOn:
+      - RejectTrafficLogGroup
+      - FlowLogRole
+    Properties:
+      DeliverLogsPermissionArn: !GetAtt 'FlowLogRole.Arn'
+      LogDestination: !Join
+        - ''
+        - - 'arn:aws:logs:'
+          - !Ref 'AWS::Region'
+          - ':'
+          - !Ref 'AWS::AccountId'
+          - ':log-group:'
+          - !Join
+            - /
+            - - !Ref 'AWS::StackName'
+              - vpc
+              - !Ref 'VPC'
+              - flows
+              - reject
+      LogDestinationType: cloud-watch-logs
+      ResourceId: !Ref 'VPC'
+      ResourceType: VPC
+      TrafficType: REJECT
+    Type: AWS::EC2::FlowLog
+  RejectTrafficLogGroup:
+    Properties:
+      LogGroupName: !Join
+        - /
+        - - !Ref 'AWS::StackName'
+          - vpc
+          - !Ref 'VPC'
+          - flows
+          - reject
+      RetentionInDays: !Ref 'LogRetentionInDays'
+    Type: AWS::Logs::LogGroup
   Route53HealthCheckVPCPrefixList:
     Properties:
       AddressFamily: IPv4
@@ -3297,6 +3585,15 @@ Resources:
     Condition: ''
     DependsOn:
       - VPCPrefixListManagerRole
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: This function is only invoked during the deployment of this solution,
+              potentially PRIOR to the creation of a VPC, and is never used again.
+          - id: W92
+            reason: This function is only invoked during the deployment of this solution
+              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
       Code:
         ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
@@ -3371,11 +3668,16 @@ Resources:
         - ''
         - - /aws/lambda/
           - !Ref 'VPCPrefixListManagerFunction'
-      RetentionInDays: 30
+      RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
   VPCPrefixListManagerRole:
     Condition: ''
     DependsOn: []
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: ec2:DescribeManagedPrefixLists does not support resource filtering.
     Properties:
       AssumeRolePolicyDocument:
         Statement:
