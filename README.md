@@ -147,6 +147,25 @@ export BootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9
 ./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
 ![FIX Test Terminals](./images/fix-test-terminals.png)
 
+## Testing for Resilience and Failover
+- Testing Failover of ECS Task/Container
+- Goto CloudWatch Console --> Log Groups --> Filter by stack name e.g. FixEngine... --> Select Log Group e.g. /aws/ecs/fargate/<cloudformation-stack-name>
+- You will see two log streams named as 
+<cloudformation-stack-name>/Primary/<cloudformation-stack-name>/******* e.g. FixEngineOnAws-Client/Primary/FixEngineOnAws-Client/********
+<cloudformation-stack-name>/Failover/<cloudformation-stack-name>/******* e.g. FixEngineOnAws-Client/Failover/FixEngineOnAws-Client/********
+![FIX ECS CloudWatch](./images/ecs-cloudwatch.png)
+
+- Select the log for Primary and Failover to check if "IM_AM_THE_ACTIVE_ENGINE" is true or false to determine the active FIX Engine. This will display as "IM_AM_THE_ACTIVE_ENGINE: true" for active FIX Engine
+- Goto ECS Console -- Click on Cluster --> Select the Active Cluster --> Click on Tasks Tab --> Select the task and click stop and then stop again on confirmation window. 
+![FIX ECS Stop Task](./images/ecs-stop-task.png)
+- It takes approxmately 15-30 seconds for passive FIX engine become active. 
+
+## Throughput Considerations
+- Below RDS, ECS and Kafka configuration provides approximately 200 TPS on single partitioned topic with replication factor of 2. AWS FIX Engine Team is working on increasing the throughput with horizontal and vertical scaling in upcoming releases. 
+- 2 Node Kafka Cluster with intsance size kafka.m5.large 
+- ECS Task: Task CPU (unit) 512 Task memory (MiB): 1024
+- 2 Node Aurora MySQL Multi-Master with instance type db.r4.2xlarge
+
 
 ## API Documentation
 - You can find the QuickFix Message API documentation here https://javadoc.io/doc/org.quickfixj/quickfixj-core/latest/index.html
