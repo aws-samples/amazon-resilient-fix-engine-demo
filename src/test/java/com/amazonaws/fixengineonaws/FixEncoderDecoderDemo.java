@@ -16,7 +16,7 @@ import quickfix.field.Symbol;
 import quickfix.field.TargetCompID;
 import quickfix.field.TimeInForce;
 import quickfix.field.TransactTime;
-import quickfix.fix42.NewOrderSingle;
+import quickfix.fix42.NewOrderSingle; //update fix version to the version the application will be using
 
 /**
  * Fix encoding and decoding demo class
@@ -49,6 +49,15 @@ public class FixEncoderDecoderDemo {
 		char orderType = OrdType.MARKET;
 		char timeInForce = TimeInForce.DAY;
 		NewOrderSingle newOrder = new NewOrderSingle(new ClOrdID(orderIdStr), new HandlInst('1'), new Symbol(symbolStr), new Side(side), new TransactTime(), new OrdType(orderType));
+		/*
+			Choose NewOrderSingle constructor based on FIX version
+			4.2 - NewOrderSingle(ClOrdID clOrdID, HandlInst handlInst, Symbol symbol, Side side, TransactTime transactTime, OrdType ordType)
+			4.3 - NewOrderSingle(ClOrdID clOrdID, HandlInst handlInst, Side side, TransactTime transactTime, OrdType ordType) 
+			4.4 - NewOrderSingle(ClOrdID clOrdID, Side side, TransactTime transactTime, OrdType ordType) 
+			5.0 - NewOrderSingle(ClOrdID clOrdID, Side side, TransactTime transactTime, OrdType ordType) 
+		 */
+		
+		
 		quickfix.Message.Header header = newOrder.getHeader();
 		header.setField(new SenderCompID(accountIdStr));
 		header.setField(new SenderSubID(senderSubIdStr));
@@ -67,12 +76,12 @@ public class FixEncoderDecoderDemo {
    	
    	public static NewOrderSingle fixStringToOrder(String orderStr) {
     	MessageFactory messageFactory = new DefaultMessageFactory();
-    	String fixFormatXml = "FIX42.xml";
+    	String fixFormatXml = "FIX42.xml"; //update to desired FIX version
+    	//Can update InputStream object name to desired FIX version
     	InputStream fix42Input = FixEngine.class.getClassLoader().getResourceAsStream(fixFormatXml); // This pulls the XML file from quickfix-messages-all-2.2.0.jar
-        
     	DataDictionary dataDictionary;
 		try {
-			dataDictionary = new DataDictionary(fix42Input);
+			dataDictionary = new DataDictionary(fix42Input); //if changing name, update here as well
 		} catch (ConfigError e) {
 			System.out.println("ERROR: Unable to find FIX Format XML file (in quickfix-messages-all jar file): " + fixFormatXml);
 			System.out.println(e);
