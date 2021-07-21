@@ -42,8 +42,8 @@ import quickfix.field.Symbol;
 import quickfix.field.TargetCompID;
 import quickfix.field.TimeInForce;
 import quickfix.field.TransactTime;
-import quickfix.fix42.ExecutionReport;
-import quickfix.fix42.NewOrderSingle;
+import quickfix.fix42.ExecutionReport; //update fix version to the version the application will be using
+import quickfix.fix42.NewOrderSingle;  //update fix version to the version the application will be using
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -101,6 +101,13 @@ public class TestClient {
 		char orderType = OrdType.MARKET;
 		char timeInForce = TimeInForce.DAY;
 		NewOrderSingle newOrder = new NewOrderSingle(new ClOrdID(orderIdStr), new HandlInst('1'), new Symbol(symbolStr), new Side(side), new TransactTime(), new OrdType(orderType));
+			/*
+			Choose message constructor based on FIX version
+			4.2 - NewOrderSingle(ClOrdID clOrdID, HandlInst handlInst, Symbol symbol, Side side, TransactTime transactTime, OrdType ordType)
+			4.3 - NewOrderSingle(ClOrdID clOrdID, HandlInst handlInst, Side side, TransactTime transactTime, OrdType ordType) 
+			4.4 - NewOrderSingle(ClOrdID clOrdID, Side side, TransactTime transactTime, OrdType ordType) 
+			5.0 - NewOrderSingle(ClOrdID clOrdID, Side side, TransactTime transactTime, OrdType ordType) 
+		 */
 		quickfix.Message.Header header = newOrder.getHeader();
 		header.setField(new SenderCompID(accountIdStr));
 		header.setField(new SenderSubID(senderSubIdStr));
@@ -124,6 +131,11 @@ public class TestClient {
 		char timeInForce = TimeInForce.DAY;
 		ExecutionReport newExec = new ExecutionReport(new OrderID(orderIdStr), new ExecID(execIdStr), new ExecTransType(ExecTransType.NEW), new ExecType(ExecType.PARTIAL_FILL), 
 				new OrdStatus(OrdStatus.PARTIALLY_FILLED), new Symbol(symbolStr), new Side(side), new LeavesQty(250), new CumQty(50), new AvgPx(123.34));
+				 // Choose ExecutionReport constructor based on FIX version
+			     // 4.2 - ExecutionReport(OrderID orderID, ExecID execID, ExecTransType execTransType, ExecType execType, OrdStatus ordStatus, Symbol symbol, Side side, LeavesQty leavesQty, CumQty cumQty, AvgPx avgPx) 
+                 // 4.3 - ExecutionReport(OrderID orderID, ExecID execID, ExecType execType, OrdStatus ordStatus, Side side, LeavesQty leavesQty, CumQty cumQty, AvgPx avgPx) 
+                 // 4.4 - ExecutionReport(OrderID orderID, ExecID execID, ExecType execType, OrdStatus ordStatus, Side side, LeavesQty leavesQty, CumQty cumQty, AvgPx avgPx) 
+                 // 5.0 - ExecutionReport(OrderID orderID, ExecID execID, ExecType execType, OrdStatus ordStatus, Side side, LeavesQty leavesQty, CumQty cumQty) 
 		return newExec;
 	}
     
