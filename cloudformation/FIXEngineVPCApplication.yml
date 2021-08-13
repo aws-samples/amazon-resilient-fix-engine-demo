@@ -21,6 +21,10 @@ Conditions:
   IsInitiatorStack: !Equals
     - initiator
     - !Ref 'ConnectionType'
+  KMSKeySupplied: !Not
+    - !Equals
+      - ''
+      - !Ref 'KMSKeyARN'
   KafkaTLSEnabled: !Equals
     - 'true'
     - !Ref 'KafkaConnTLS'
@@ -57,6 +61,7 @@ Metadata:
       - Label:
           default: Security
         Parameters:
+          - KMSKeyARN
           - FIXClientCIDRs
           - UserApplicationCIDRs
       - Label:
@@ -90,6 +95,8 @@ Metadata:
         default: Failover Public Subnet CIDR
       HostedZoneID:
         default: Hosted Zone
+      KMSKeyARN:
+        default: KMS Key ARN
       LogRetentionInDays:
         default: Log Retention in Days
       PrimaryPrivateSubnet:
@@ -114,9 +121,9 @@ Metadata:
         default: VPC CIDR
   Comments: FIX Engine on AWS POC
   CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.34
-  LastUpdated: July 13, 2021
-  Version: v1.34
+  Description: FIXEngineOnAWS - v1.37
+  LastUpdated: August 06, 2021
+  Version: v1.37
 Outputs:
   ApplicationID:
     Condition: ''
@@ -124,6 +131,9 @@ Outputs:
   ConnectionType:
     Condition: ''
     Value: !Ref 'ConnectionType'
+  DatabaseName:
+    Condition: ''
+    Value: quickfix
   DebugLogging:
     Condition: ''
     Value: !Ref 'DebugLogging'
@@ -164,12 +174,21 @@ Outputs:
   KafkaConnTLS:
     Condition: ''
     Value: !Ref 'KafkaConnTLS'
+  KafkaConsumerGroupID:
+    Condition: ''
+    Value: fixengine-consumer
+  KafkaFromFixEngineTopicName:
+    Condition: ''
+    Value: FROM-FIX-ENGINE
   KafkaPort:
     Condition: ''
     Value: !If
       - KafkaTLSEnabled
       - '9094'
       - '9092'
+  KafkaToFixEngineTopicName:
+    Condition: ''
+    Value: TO-FIX-ENGINE
   NATGatewayIPAddresses:
     Condition: ''
     Value: !Join
@@ -257,6 +276,14 @@ Parameters:
     Default: ''
     Description: '[Required for Acceptor Stack] If you are the acceptor, this should
       be the Hosted Zone ID for the domain hosted in Route53.'
+    Type: String
+  KMSKeyARN:
+    Default: ''
+    Description: >-
+      [Optional] The ARN of the KMS key you wish to use for data encrypion. Warning:
+      Adding or changing the KMS key once the stack has been deployed may require
+      resources to be recreated (e.g., DB & MSK Clusters), and thus may lead to data
+      loss.
     Type: String
   KafkaConnTLS:
     AllowedValues:
@@ -386,6 +413,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'AutomationDocumentStarterRole.Arn'
       Runtime: python3.7
       Timeout: 180
@@ -394,6 +425,11 @@ Resources:
     Condition: ''
     DependsOn:
       - AutomationDocumentStarterFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -482,6 +518,23 @@ Resources:
       Type: String
       Value: !Ref 'ConnectionType'
     Type: AWS::SSM::Parameter
+  DatabaseNameParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'FIX engine MySQL database name for '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - DatabaseName
+      Tier: Standard
+      Type: String
+      Value: quickfix
+    Type: AWS::SSM::Parameter
   DebugLoggingParam:
     Condition: ''
     Properties:
@@ -509,6 +562,11 @@ Resources:
             reason: ECR does not allow capital letters in repository names which is
               why we must sanitize/lowercase the auto-generated name.
     Properties:
+      EncryptionConfiguration: !If
+        - KMSKeySupplied
+        - EncryptionType: KMS
+          KmsKey: !Ref 'KMSKeyARN'
+        - EncryptionType: AES256
       ImageScanningConfiguration:
         ScanOnPush: true
       RepositoryName: !Join
@@ -684,7 +742,7 @@ Resources:
                       - ':'
                       - !Ref 'AWS::AccountId'
                       - :security-group/
-                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
+                      - !GetAtt 'ECSImageBuildSecurityGroup.GroupId'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -770,6 +828,11 @@ Resources:
         - !Ref 'ECSImageBuildInstanceRole'
     Type: AWS::IAM::InstanceProfile
   ECSImageBuildLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - /
@@ -846,7 +909,7 @@ Resources:
           - Update
         ExecutionRoleArn: !GetAtt 'ECSImageBuildExecutionRole.Arn'
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.34'
+        TemplateVersion: '1.37'
       ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
@@ -918,6 +981,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'ECSImageRemoverRole.Arn'
       Runtime: python3.7
       Timeout: 15
@@ -926,6 +993,11 @@ Resources:
     Condition: ''
     DependsOn:
       - ECSImageRemoverFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -1118,7 +1190,7 @@ Resources:
                 - IsAcceptorStack
                 - !Ref 'FailoverNLB'
                 - ''
-          Essential: 'true'
+          Essential: true
           Image: !If
             - UseDefaultImage
             - !Join
@@ -1191,7 +1263,7 @@ Resources:
               Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
-          Essential: 'true'
+          Essential: true
           Image: !If
             - UseDefaultImage
             - !Join
@@ -1313,7 +1385,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - b
       CidrBlock: !Ref 'FailoverPrivateSubnetCIDR'
-      MapPublicIpOnLaunch: 'false'
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Join
@@ -1341,7 +1413,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - b
       CidrBlock: !Ref 'FailoverPublicSubnetCIDR'
-      MapPublicIpOnLaunch: 'false'
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Join
@@ -1366,16 +1438,16 @@ Resources:
       - RDSParameterGroup
       - RDSClusterErrorLogGroup
     Properties:
-      AllowMajorVersionUpgrade: 'false'
-      AutoMinorVersionUpgrade: 'true'
-      CopyTagsToSnapshot: 'true'
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
       DBClusterIdentifier: !Ref 'RDSCluster'
       DBInstanceClass: db.r4.2xlarge
       DBParameterGroupName: !Ref 'RDSParameterGroup'
-      EnablePerformanceInsights: 'false'
+      EnablePerformanceInsights: false
       Engine: aurora
-      MultiAZ: 'false'
-      PubliclyAccessible: 'false'
+      MultiAZ: false
+      PubliclyAccessible: false
     Type: AWS::RDS::DBInstance
   FailoverRouteToNATGateway:
     DependsOn:
@@ -1391,7 +1463,7 @@ Resources:
     DependsOn:
       - VPC
     Properties:
-      HealthCheckEnabled: 'true'
+      HealthCheckEnabled: true
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
       TargetGroupAttributes:
@@ -1416,6 +1488,11 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
     Type: AWS::IAM::Role
   FargateLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -1428,14 +1505,40 @@ Resources:
       - Route53HealthCheckVPCPrefixList
       - VPC
       - PrimaryPrivateSubnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
     Properties:
       GroupDescription: Security Group for Fargate Tasks
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/0'
-          Description: Allow All TCP Traffic
-          FromPort: 1
+          Description: All HTTP Traffic
+          FromPort: 80
           IpProtocol: tcp
-          ToPort: 65535
+          ToPort: 80
+        - CidrIp: '0.0.0.0/0'
+          Description: All HTTPS Traffic
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+        - CidrIp: '0.0.0.0/0'
+          Description: Kafka Traffic
+          FromPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
+          IpProtocol: tcp
+          ToPort: !If
+            - KafkaTLSEnabled
+            - 9094
+            - 9092
+        - CidrIp: '0.0.0.0/0'
+          Description: FIX Server Traffic
+          FromPort: !Ref 'FIXServerPort'
+          IpProtocol: tcp
+          ToPort: !Ref 'FIXServerPort'
       SecurityGroupIngress:
         - Description: FIX Engine Access for FIX Clients
           FromPort: !If
@@ -1455,6 +1558,17 @@ Resources:
           ToPort: !Ref 'FIXServerPort'
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
+  FargateSecurityGroupEgressToRDS:
+    DependsOn:
+      - FargateSecurityGroup
+    Properties:
+      Description: Allow Database Traffic to RDS
+      DestinationSecurityGroupId: !GetAtt 'RDSClusterSecurityGroup.GroupId'
+      FromPort: 3306
+      GroupId: !GetAtt 'FargateSecurityGroup.GroupId'
+      IpProtocol: tcp
+      ToPort: 3306
+    Type: AWS::EC2::SecurityGroupEgress
   FargateTaskRole:
     DependsOn:
       - RDSClusterNonAdminSecret
@@ -1567,7 +1681,7 @@ Resources:
   GlobalAccelerator:
     Condition: IsAcceptorStack
     Properties:
-      Enabled: 'true'
+      Enabled: true
       Name: !Ref 'AWS::StackName'
     Type: AWS::GlobalAccelerator::Accelerator
   GlobalAcceleratorArnParam:
@@ -1720,6 +1834,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'GlobalAcceleratorInfoRetrieverRole.Arn'
       Runtime: python3.7
       Timeout: 15
@@ -1728,6 +1846,11 @@ Resources:
     Condition: IsAcceptorStack
     DependsOn:
       - GlobalAcceleratorInfoRetrieverFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -1807,6 +1930,40 @@ Resources:
       Type: String
       Value: !Ref 'KafkaConnTLS'
     Type: AWS::SSM::Parameter
+  KafkaConsumerGroupIDParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'Kafka Consumer Group ID for the '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - KafkaConsumerGroupID
+      Tier: Standard
+      Type: String
+      Value: fixengine-consumer
+    Type: AWS::SSM::Parameter
+  KafkaFromFixEngineTopicNameParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'Kafka from FIX Engine topic name for the '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - KafkaFromFixEngineTopicName
+      Tier: Standard
+      Type: String
+      Value: FROM-FIX-ENGINE
+    Type: AWS::SSM::Parameter
   KafkaPortParam:
     Condition: ''
     Properties:
@@ -1827,6 +1984,23 @@ Resources:
         - '9094'
         - '9092'
     Type: AWS::SSM::Parameter
+  KafkaToFixEngineTopicNameParam:
+    Condition: ''
+    Properties:
+      Description: !Join
+        - ''
+        - - 'Kafka to FIX Engine topic name for the '
+          - !Ref 'AWS::StackName'
+          - ' stack'
+      Name: !Join
+        - /
+        - - /fixengine
+          - !Ref 'AWS::StackName'
+          - KafkaToFixEngineTopicName
+      Tier: Standard
+      Type: String
+      Value: TO-FIX-ENGINE
+    Type: AWS::SSM::Parameter
   MSKCluster:
     DependsOn:
       - MSKClusterSecurityGroup
@@ -1846,9 +2020,11 @@ Resources:
             VolumeSize: 100
       ClusterName: !Ref 'AWS::StackName'
       EncryptionInfo:
+        EncryptionAtRest:
+          DataVolumeKMSKeyId: !Ref 'KMSKeyARN'
         EncryptionInTransit:
           ClientBroker: TLS_PLAINTEXT
-          InCluster: 'true'
+          InCluster: true
       KafkaVersion: 2.2.1
       NumberOfBrokerNodes: 2
     Type: AWS::MSK::Cluster
@@ -1912,6 +2088,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'MSKClusterInfoRetrieverRole.Arn'
       Runtime: python3.7
       Timeout: 15
@@ -1920,6 +2100,11 @@ Resources:
     Condition: ''
     DependsOn:
       - MSKClusterInfoRetrieverFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -1958,6 +2143,7 @@ Resources:
       - MSKClusterPrepPolicy
       - MSKInitializationDocument
       - AutomationDocumentStarterLogGroup
+      - MSKClusterPrepSecurityGroupEgressToMSK
     Properties:
       Properties:
         AutomationDocumentName: !Ref 'MSKInitializationDocument'
@@ -1983,7 +2169,7 @@ Resources:
     DependsOn:
       - MSKCluster
     Properties:
-      ActionsEnabled: 'true'
+      ActionsEnabled: true
       AlarmActions:
         - !Ref 'SNSTopicArn'
       AlarmDescription: Alerts when MSK cluster's memory utilization exceeds 80%
@@ -2113,6 +2299,11 @@ Resources:
         - !Ref 'MSKClusterPrepInstanceRole'
     Type: AWS::IAM::InstanceProfile
   MSKClusterPrepLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - /
@@ -2155,16 +2346,32 @@ Resources:
     DependsOn:
       - VPC
       - PrimaryPrivateSubnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
     Properties:
       GroupDescription: Security Group for MSK Cluster Prep
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/0'
-          Description: Allow All TCP Traffic
-          FromPort: 1
+          Description: Allow All HTTPS Traffic
+          FromPort: 443
           IpProtocol: tcp
-          ToPort: 65535
+          ToPort: 443
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
+  MSKClusterPrepSecurityGroupEgressToMSK:
+    DependsOn:
+      - MSKClusterPrepSecurityGroup
+    Properties:
+      Description: Allow All TCP Traffic to MSK Cluster
+      DestinationSecurityGroupId: !GetAtt 'MSKClusterSecurityGroup.GroupId'
+      FromPort: 2181
+      GroupId: !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
+      IpProtocol: tcp
+      ToPort: 2181
+    Type: AWS::EC2::SecurityGroupEgress
   MSKClusterSecurityGroup:
     DependsOn:
       - FargateSecurityGroup
@@ -2278,10 +2485,14 @@ Resources:
                       - !Ref 'MSKCluster'
                       - '" --query ''ClusterInfo.ZookeeperConnectString'' --output
                         text)'
-                  - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
-                    --replication-factor 2 --partitions 1 --topic TO-FIX-ENGINE
-                  - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
-                    --replication-factor 2 --partitions 1 --topic FROM-FIX-ENGINE
+                  - !Join
+                    - ''
+                    - - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
+                        --replication-factor 2 --partitions 1 --topic "TO-FIX-ENGINE"
+                  - !Join
+                    - ''
+                    - - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
+                        --replication-factor 2 --partitions 1 --topic "FROM-FIX-ENGINE"
             name: CreateMSKTopics
             onFailure: step:TerminateInstanceOnFailure
           - action: aws:executeAwsApi
@@ -2370,6 +2581,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'MiscMethodsHandlerRole.Arn'
       Runtime: python3.7
       Timeout: 15
@@ -2378,6 +2593,11 @@ Resources:
     Condition: ''
     DependsOn:
       - MiscMethodsHandlerFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''
@@ -2478,7 +2698,7 @@ Resources:
                 - IsAcceptorStack
                 - !Ref 'PrimaryNLB'
                 - ''
-          Essential: 'true'
+          Essential: true
           Image: !If
             - UseDefaultImage
             - !Join
@@ -2551,7 +2771,7 @@ Resources:
               Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
-          Essential: 'true'
+          Essential: true
           Image: !If
             - UseDefaultImage
             - !Join
@@ -2673,7 +2893,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - a
       CidrBlock: !Ref 'PrimaryPrivateSubnetCIDR'
-      MapPublicIpOnLaunch: 'false'
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Join
@@ -2701,7 +2921,7 @@ Resources:
         - - !Ref 'AWS::Region'
           - a
       CidrBlock: !Ref 'PrimaryPublicSubnetCIDR'
-      MapPublicIpOnLaunch: 'false'
+      MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
           Value: !Join
@@ -2726,16 +2946,16 @@ Resources:
       - RDSParameterGroup
       - RDSClusterErrorLogGroup
     Properties:
-      AllowMajorVersionUpgrade: 'false'
-      AutoMinorVersionUpgrade: 'true'
-      CopyTagsToSnapshot: 'true'
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
       DBClusterIdentifier: !Ref 'RDSCluster'
       DBInstanceClass: db.r4.2xlarge
       DBParameterGroupName: !Ref 'RDSParameterGroup'
-      EnablePerformanceInsights: 'false'
+      EnablePerformanceInsights: false
       Engine: aurora
-      MultiAZ: 'false'
-      PubliclyAccessible: 'false'
+      MultiAZ: false
+      PubliclyAccessible: false
     Type: AWS::RDS::DBInstance
   PrimaryRouteToNATGateway:
     DependsOn:
@@ -2751,7 +2971,7 @@ Resources:
     DependsOn:
       - VPC
     Properties:
-      HealthCheckEnabled: 'true'
+      HealthCheckEnabled: true
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
       TargetGroupAttributes:
@@ -2798,10 +3018,14 @@ Resources:
         - general
         - slowquery
         - audit
-      EnableIAMDatabaseAuthentication: 'false'
+      EnableIAMDatabaseAuthentication: false
       Engine: aurora
       EngineMode: multimaster
       EngineVersion: 5.6.10a
+      KmsKeyId: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       MasterUserPassword: !Join
         - ''
         - - '{{resolve:secretsmanager:'
@@ -2812,12 +3036,17 @@ Resources:
         - - '{{resolve:secretsmanager:'
           - !Ref 'RDSClusterAdminSecret'
           - :SecretString:username}}
-      StorageEncrypted: 'true'
+      StorageEncrypted: true
       Tags: []
       VpcSecurityGroupIds:
         - !Ref 'RDSClusterSecurityGroup'
     Type: AWS::RDS::DBCluster
   RDSClusterAdminSecret:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: No cross-account access to this secret is required.
     Properties:
       Description: !Join
         - ''
@@ -2826,14 +3055,14 @@ Resources:
           - ' RDS cluster'
       GenerateSecretString:
         ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
-        ExcludeLowercase: 'false'
-        ExcludeNumbers: 'false'
-        ExcludePunctuation: 'true'
-        ExcludeUppercase: 'false'
+        ExcludeLowercase: false
+        ExcludeNumbers: false
+        ExcludePunctuation: true
+        ExcludeUppercase: false
         GenerateStringKey: password
-        IncludeSpace: 'false'
+        IncludeSpace: false
         PasswordLength: 16
-        RequireEachIncludedType: 'true'
+        RequireEachIncludedType: true
         SecretStringTemplate: '{"username": "FEAdmin"}'
     Type: AWS::SecretsManager::Secret
   RDSClusterAdminSecretAttachment:
@@ -2848,6 +3077,11 @@ Resources:
   RDSClusterErrorLogGroup:
     DependsOn:
       - RDSCluster
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - /
@@ -2860,6 +3094,7 @@ Resources:
     DependsOn:
       - RDSClusterPrepPolicy
       - RDSInitializationDocument
+      - FargateSecurityGroupEgressToRDS
       - AutomationDocumentStarterLogGroup
     Properties:
       Properties:
@@ -2882,6 +3117,11 @@ Resources:
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
   RDSClusterNonAdminSecret:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W77
+            reason: No cross-account access to this secret is required.
     Properties:
       Description: !Join
         - ''
@@ -2890,14 +3130,14 @@ Resources:
           - ' RDS cluster'
       GenerateSecretString:
         ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
-        ExcludeLowercase: 'false'
-        ExcludeNumbers: 'false'
-        ExcludePunctuation: 'true'
-        ExcludeUppercase: 'false'
+        ExcludeLowercase: false
+        ExcludeNumbers: false
+        ExcludePunctuation: true
+        ExcludeUppercase: false
         GenerateStringKey: password
-        IncludeSpace: 'false'
+        IncludeSpace: false
         PasswordLength: 16
-        RequireEachIncludedType: 'true'
+        RequireEachIncludedType: true
         SecretStringTemplate: '{"username": "fixengine"}'
     Type: AWS::SecretsManager::Secret
   RDSClusterNonAdminSecretArnParam:
@@ -2977,7 +3217,7 @@ Resources:
                       - ':'
                       - !Ref 'AWS::AccountId'
                       - :security-group/
-                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
+                      - !GetAtt 'RDSClusterSecurityGroup.GroupId'
               - Action:
                   - iam:PassRole
                 Effect: Allow
@@ -3051,6 +3291,11 @@ Resources:
         - !Ref 'RDSClusterPrepInstanceRole'
     Type: AWS::IAM::InstanceProfile
   RDSClusterPrepLogGroup:
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - /
@@ -3089,6 +3334,42 @@ Resources:
       Roles:
         - !Ref 'AutomationDocumentStarterRole'
     Type: AWS::IAM::Policy
+  RDSClusterPrepSecurityGroup:
+    DependsOn:
+      - VPC
+      - PrimaryPrivateSubnet
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W5
+            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
+    Properties:
+      GroupDescription: Security Group for RDS Cluster Prep
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All HTTPS Traffic
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: '0.0.0.0/0'
+          Description: Allow All HTTPS Traffic
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      VpcId: !Ref 'VPC'
+    Type: AWS::EC2::SecurityGroup
+  RDSClusterPrepSecurityGroupEgressToRDS:
+    DependsOn:
+      - RDSClusterSecurityGroup
+      - RDSClusterPrepSecurityGroup
+    Properties:
+      Description: Allow TCP Traffic to RDS MySQL
+      DestinationSecurityGroupId: !GetAtt 'RDSClusterSecurityGroup.GroupId'
+      FromPort: 3306
+      GroupId: !GetAtt 'RDSClusterPrepSecurityGroup.GroupId'
+      IpProtocol: tcp
+      ToPort: 3306
+    Type: AWS::EC2::SecurityGroupEgress
   RDSClusterSecretArnParam:
     Condition: ''
     Properties:
@@ -3161,6 +3442,7 @@ Resources:
       - RDSClusterNonAdminSecret
       - RDSClusterPrepExecutionRole
       - RDSClusterPrepInstanceRoleProfile
+      - RDSClusterPrepSecurityGroupEgressToRDS
     Properties:
       Content:
         assumeRole: '{{ExecutionRoleArn}}'
@@ -3177,7 +3459,7 @@ Resources:
               MaxInstanceCount: 1
               MinInstanceCount: 1
               SecurityGroupIds:
-                - !Ref 'FargateSecurityGroup'
+                - !Ref 'RDSClusterPrepSecurityGroup'
               SubnetId: !Ref 'PrimaryPrivateSubnet'
               TagSpecifications:
                 - ResourceType: instance
@@ -3205,8 +3487,8 @@ Resources:
                 - '{{LaunchInstance.InstanceIds}}'
               Parameters:
                 commands:
-                  - sudo apt update
-                  - sudo apt install awscli mysql-client jq -y
+                  - sudo apt-get update 2>/dev/null
+                  - sudo apt-get install awscli mysql-client jq -y 2>/dev/null
                   - '#sudo yum install jq mysql -y'
                   - !Join
                     - ''
@@ -3275,50 +3557,50 @@ Resources:
                     '$data.username')
                   - NON_ADMIN_DB_PASSWORD=$(jq -n -r --argjson data "$NON_ADMIN_DB_SECRET"
                     '$data.password')
-                  - "echo \"\nDROP DATABASE IF EXISTS quickfix;\n\nCREATE DATABASE\
-                    \ quickfix;\n\nUSE quickfix;\n\n/* Deletes (if necessary) and\
-                    \ Creates Non-Admin User */\nCREATE USER '$NON_ADMIN_DB_USERNAME'\
+                  - "echo \"\nDROP DATABASE IF EXISTS <database-name>;\n\nCREATE DATABASE\
+                    \ <database-name>;\n\nUSE <database-name>;\n\n/* Deletes (if necessary)\
+                    \ and Creates Non-Admin User */\nCREATE USER '$NON_ADMIN_DB_USERNAME'\
                     \ IDENTIFIED BY '$NON_ADMIN_DB_PASSWORD';\n\nCREATE TABLE sessions\
                     \ (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64)\
                     \ NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier\
                     \ VARCHAR(64) NOT NULL,\n  creation_time DATETIME NOT NULL,\n\
                     \  incoming_seqnum INT NOT NULL, \n  outgoing_seqnum INT NOT NULL,\n\
                     \  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier)\n\
-                    );\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.sessions\
+                    );\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.sessions\
                     \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages (\n  beginstring\
                     \ CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid\
                     \ VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n\
                     \  msgseqnum INT NOT NULL, \n  message BLOB NOT NULL,\n  PRIMARY\
                     \ KEY (beginstring, sendercompid, targetcompid, session_qualifier,\
-                    \ msgseqnum)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages\
+                    \ msgseqnum)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages\
                     \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_log (\n\
                     \  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT\
                     \ NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n\
                     \  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier\
                     \ VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\n\
-                    GRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages_log\
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_log\
                     \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_backup_log\
                     \ (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME\
                     \ NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring\
                     \ CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n\
                     \  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY\
-                    \ KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages_backup_log\
+                    \ KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_backup_log\
                     \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_log (\n \
                     \ id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT\
                     \ NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n\
                     \  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier\
                     \ VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\n\
-                    GRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.event_log TO\
-                    \ '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_backup_log (\n\
-                    \  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT\
-                    \ NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n\
-                    \  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier\
-                    \ VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\n\
-                    GRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.event_backup_log\
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_log\
+                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_backup_log\
+                    \ (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME\
+                    \ NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring\
+                    \ CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n\
+                    \  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY\
+                    \ KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_backup_log\
                     \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE ActiveEngine  (\n\
                     \  TS TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  ipAddress VARCHAR(16)\
                     \ NOT NULL,\n  PRIMARY KEY (TS, ipAddress)\n);\nGRANT SELECT,\
-                    \ UPDATE ON quickfix.ActiveEngine TO '$NON_ADMIN_DB_USERNAME';\n\
+                    \ UPDATE ON <database-name>.ActiveEngine TO '$NON_ADMIN_DB_USERNAME';\n\
                     \nINSERT INTO ActiveEngine VALUES (NOW(), 'none');\n\nDELIMITER\
                     \ //\n\ncreate procedure EngineStatus(IN ipAdd varchar(16), OUT\
                     \ value int, OUT lastIpAdd varchar(16), OUT lastTimestamp DATETIME,\
@@ -3339,8 +3621,20 @@ Resources:
                     \   #   Else I am still the active leader\n      END IF;\n   \
                     \ END IF;\n    COMMIT;\nEND //\n\nDELIMITER ;\n\nGRANT SELECT\
                     \ ON mysql.proc TO '$NON_ADMIN_DB_USERNAME';\nGRANT EXECUTE ON\
-                    \ PROCEDURE quickfix.EngineStatus TO '$NON_ADMIN_DB_USERNAME';\n\
+                    \ PROCEDURE <database-name>.EngineStatus TO '$NON_ADMIN_DB_USERNAME';\n\
                     \n\" >> /tmp/rds-cluster-prep.sql"
+                  - !Join
+                    - ''
+                    - - '#sudo sed -i ''s/<database-name>/`quickfix-'
+                      - !Select
+                        - 2
+                        - !Split
+                          - /
+                          - !Ref 'AWS::StackId'
+                      - '`/g'' /tmp/rds-cluster-prep.sql'
+                  - !Join
+                    - ''
+                    - - sudo sed -i 's/<database-name>/`quickfix`/g' /tmp/rds-cluster-prep.sql
                   - !Join
                     - ''
                     - - mysql --user $ADMIN_DB_USERNAME --host $DB_HOST --ssl-mode
@@ -3409,26 +3703,18 @@ Resources:
         slow_query_log: 1
     Type: AWS::RDS::DBParameterGroup
   RejectFlowLog:
+    Condition: SendLogsToS3
     DependsOn:
       - RejectTrafficLogGroup
       - FlowLogRole
     Properties:
-      DeliverLogsPermissionArn: !GetAtt 'FlowLogRole.Arn'
       LogDestination: !Join
         - ''
-        - - 'arn:aws:logs:'
-          - !Ref 'AWS::Region'
-          - ':'
-          - !Ref 'AWS::AccountId'
-          - ':log-group:'
-          - !Join
-            - /
-            - - !Ref 'AWS::StackName'
-              - vpc
-              - !Ref 'VPC'
-              - flows
-              - reject
-      LogDestinationType: cloud-watch-logs
+        - - 'arn:aws:s3:::'
+          - !Ref 'S3LogsBucket'
+          - /
+          - !Ref 'S3LogsBucketPrefix'
+      LogDestinationType: s3
       ResourceId: !Ref 'VPC'
       ResourceType: VPC
       TrafficType: REJECT
@@ -3572,8 +3858,8 @@ Resources:
   VPC:
     Properties:
       CidrBlock: !Ref 'VpcCIDR'
-      EnableDnsHostnames: 'true'
-      EnableDnsSupport: 'true'
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
       Tags:
         - Key: Name
           Value: !Join
@@ -3655,6 +3941,10 @@ Resources:
           - !Ref 'AWS::StackName'
           - ' stack'
       Handler: index.handler
+      KmsKeyArn: !If
+        - KMSKeySupplied
+        - !Ref 'KMSKeyARN'
+        - ''
       Role: !GetAtt 'VPCPrefixListManagerRole.Arn'
       Runtime: python3.7
       Timeout: 15
@@ -3663,6 +3953,11 @@ Resources:
     Condition: ''
     DependsOn:
       - VPCPrefixListManagerFunction
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W84
+            reason: These logs do not contain sensitive data.
     Properties:
       LogGroupName: !Join
         - ''

@@ -65,6 +65,18 @@
                 }
             ]
         },
+        "KMSKeySupplied": {
+            "Fn::Not": [
+                {
+                    "Fn::Equals": [
+                        "",
+                        {
+                            "Ref": "KMSKeyARN"
+                        }
+                    ]
+                }
+            ]
+        },
         "KafkaTLSEnabled": {
             "Fn::Equals": [
                 "true",
@@ -130,6 +142,7 @@
                         "default": "Security"
                     },
                     "Parameters": [
+                        "KMSKeyARN",
                         "FIXClientCIDRs",
                         "UserApplicationCIDRs"
                     ]
@@ -183,6 +196,9 @@
                 "HostedZoneID": {
                     "default": "Hosted Zone"
                 },
+                "KMSKeyARN": {
+                    "default": "KMS Key ARN"
+                },
                 "LogRetentionInDays": {
                     "default": "Log Retention in Days"
                 },
@@ -220,9 +236,9 @@
         },
         "Comments": "FIX Engine on AWS POC",
         "CreatedBy": "Carter Meyers",
-        "Description": "FIXEngineOnAWS - v1.34",
-        "LastUpdated": "July 13, 2021",
-        "Version": "v1.34"
+        "Description": "FIXEngineOnAWS - v1.37",
+        "LastUpdated": "August 06, 2021",
+        "Version": "v1.37"
     },
     "Outputs": {
         "ApplicationID": {
@@ -236,6 +252,10 @@
             "Value": {
                 "Ref": "ConnectionType"
             }
+        },
+        "DatabaseName": {
+            "Condition": "",
+            "Value": "quickfix"
         },
         "DebugLogging": {
             "Condition": "",
@@ -334,6 +354,14 @@
                 "Ref": "KafkaConnTLS"
             }
         },
+        "KafkaConsumerGroupID": {
+            "Condition": "",
+            "Value": "fixengine-consumer"
+        },
+        "KafkaFromFixEngineTopicName": {
+            "Condition": "",
+            "Value": "FROM-FIX-ENGINE"
+        },
         "KafkaPort": {
             "Condition": "",
             "Value": {
@@ -343,6 +371,10 @@
                     "9092"
                 ]
             }
+        },
+        "KafkaToFixEngineTopicName": {
+            "Condition": "",
+            "Value": "TO-FIX-ENGINE"
         },
         "NATGatewayIPAddresses": {
             "Condition": "",
@@ -466,6 +498,11 @@
         "HostedZoneID": {
             "Default": "",
             "Description": "[Required for Acceptor Stack] If you are the acceptor, this should be the Hosted Zone ID for the domain hosted in Route53.",
+            "Type": "String"
+        },
+        "KMSKeyARN": {
+            "Default": "",
+            "Description": "[Optional] The ARN of the KMS key you wish to use for data encrypion. Warning: Adding or changing the KMS key once the stack has been deployed may require resources to be recreated (e.g., DB & MSK Clusters), and thus may lead to data loss.",
             "Type": "String"
         },
         "KafkaConnTLS": {
@@ -611,6 +648,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "AutomationDocumentStarterRole",
@@ -627,6 +673,16 @@
             "DependsOn": [
                 "AutomationDocumentStarterFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -747,6 +803,39 @@
             },
             "Type": "AWS::SSM::Parameter"
         },
+        "DatabaseNameParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "FIX engine MySQL database name for ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "DatabaseName"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": "quickfix"
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
         "DebugLoggingParam": {
             "Condition": "",
             "Properties": {
@@ -797,6 +886,20 @@
                 }
             },
             "Properties": {
+                "EncryptionConfiguration": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "EncryptionType": "KMS",
+                            "KmsKey": {
+                                "Ref": "KMSKeyARN"
+                            }
+                        },
+                        {
+                            "EncryptionType": "AES256"
+                        }
+                    ]
+                },
                 "ImageScanningConfiguration": {
                     "ScanOnPush": true
                 },
@@ -1115,7 +1218,7 @@
                                                     ":security-group/",
                                                     {
                                                         "Fn::GetAtt": [
-                                                            "MSKClusterPrepSecurityGroup",
+                                                            "ECSImageBuildSecurityGroup",
                                                             "GroupId"
                                                         ]
                                                     }
@@ -1296,6 +1399,16 @@
             "Type": "AWS::IAM::InstanceProfile"
         },
         "ECSImageBuildLogGroup": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -1441,7 +1554,7 @@
                     "RepositoryName": {
                         "Ref": "ECRRepository"
                     },
-                    "TemplateVersion": "1.34"
+                    "TemplateVersion": "1.37"
                 },
                 "ServiceToken": {
                     "Fn::GetAtt": [
@@ -1526,6 +1639,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "ECSImageRemoverRole",
@@ -1542,6 +1664,16 @@
             "DependsOn": [
                 "ECSImageRemoverFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -1942,7 +2074,7 @@
                                 }
                             }
                         ],
-                        "Essential": "true",
+                        "Essential": true,
                         "Image": {
                             "Fn::If": [
                                 "UseDefaultImage",
@@ -2103,7 +2235,7 @@
                                 }
                             }
                         ],
-                        "Essential": "true",
+                        "Essential": true,
                         "Image": {
                             "Fn::If": [
                                 "UseDefaultImage",
@@ -2378,7 +2510,7 @@
                 "CidrBlock": {
                     "Ref": "FailoverPrivateSubnetCIDR"
                 },
-                "MapPublicIpOnLaunch": "false",
+                "MapPublicIpOnLaunch": false,
                 "Tags": [
                     {
                         "Key": "Name",
@@ -2437,7 +2569,7 @@
                 "CidrBlock": {
                     "Ref": "FailoverPublicSubnetCIDR"
                 },
-                "MapPublicIpOnLaunch": "false",
+                "MapPublicIpOnLaunch": false,
                 "Tags": [
                     {
                         "Key": "Name",
@@ -2484,9 +2616,9 @@
                 "RDSClusterErrorLogGroup"
             ],
             "Properties": {
-                "AllowMajorVersionUpgrade": "false",
-                "AutoMinorVersionUpgrade": "true",
-                "CopyTagsToSnapshot": "true",
+                "AllowMajorVersionUpgrade": false,
+                "AutoMinorVersionUpgrade": true,
+                "CopyTagsToSnapshot": true,
                 "DBClusterIdentifier": {
                     "Ref": "RDSCluster"
                 },
@@ -2494,10 +2626,10 @@
                 "DBParameterGroupName": {
                     "Ref": "RDSParameterGroup"
                 },
-                "EnablePerformanceInsights": "false",
+                "EnablePerformanceInsights": false,
                 "Engine": "aurora",
-                "MultiAZ": "false",
-                "PubliclyAccessible": "false"
+                "MultiAZ": false,
+                "PubliclyAccessible": false
             },
             "Type": "AWS::RDS::DBInstance"
         },
@@ -2523,7 +2655,7 @@
                 "VPC"
             ],
             "Properties": {
-                "HealthCheckEnabled": "true",
+                "HealthCheckEnabled": true,
                 "Port": {
                     "Ref": "FIXServerPort"
                 },
@@ -2569,6 +2701,16 @@
             "Type": "AWS::IAM::Role"
         },
         "FargateLogGroup": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -2593,15 +2735,62 @@
                 "VPC",
                 "PrimaryPrivateSubnet"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W5",
+                            "reason": "Outbound HTTP(S) traffic is required to download third-party dependencies."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "GroupDescription": "Security Group for Fargate Tasks",
                 "SecurityGroupEgress": [
                     {
                         "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All TCP Traffic",
-                        "FromPort": 1,
+                        "Description": "All HTTP Traffic",
+                        "FromPort": 80,
                         "IpProtocol": "tcp",
-                        "ToPort": 65535
+                        "ToPort": 80
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "All HTTPS Traffic",
+                        "FromPort": 443,
+                        "IpProtocol": "tcp",
+                        "ToPort": 443
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "Kafka Traffic",
+                        "FromPort": {
+                            "Fn::If": [
+                                "KafkaTLSEnabled",
+                                9094,
+                                9092
+                            ]
+                        },
+                        "IpProtocol": "tcp",
+                        "ToPort": {
+                            "Fn::If": [
+                                "KafkaTLSEnabled",
+                                9094,
+                                9092
+                            ]
+                        }
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "FIX Server Traffic",
+                        "FromPort": {
+                            "Ref": "FIXServerPort"
+                        },
+                        "IpProtocol": "tcp",
+                        "ToPort": {
+                            "Ref": "FIXServerPort"
+                        }
                     }
                 ],
                 "SecurityGroupIngress": [
@@ -2649,6 +2838,30 @@
                 }
             },
             "Type": "AWS::EC2::SecurityGroup"
+        },
+        "FargateSecurityGroupEgressToRDS": {
+            "DependsOn": [
+                "FargateSecurityGroup"
+            ],
+            "Properties": {
+                "Description": "Allow Database Traffic to RDS",
+                "DestinationSecurityGroupId": {
+                    "Fn::GetAtt": [
+                        "RDSClusterSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "FromPort": 3306,
+                "GroupId": {
+                    "Fn::GetAtt": [
+                        "FargateSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "IpProtocol": "tcp",
+                "ToPort": 3306
+            },
+            "Type": "AWS::EC2::SecurityGroupEgress"
         },
         "FargateTaskRole": {
             "DependsOn": [
@@ -2882,7 +3095,7 @@
         "GlobalAccelerator": {
             "Condition": "IsAcceptorStack",
             "Properties": {
-                "Enabled": "true",
+                "Enabled": true,
                 "Name": {
                     "Ref": "AWS::StackName"
                 }
@@ -3160,6 +3373,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "GlobalAcceleratorInfoRetrieverRole",
@@ -3176,6 +3398,16 @@
             "DependsOn": [
                 "GlobalAcceleratorInfoRetrieverFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -3340,6 +3572,72 @@
             },
             "Type": "AWS::SSM::Parameter"
         },
+        "KafkaConsumerGroupIDParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "Kafka Consumer Group ID for the ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "KafkaConsumerGroupID"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": "fixengine-consumer"
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
+        "KafkaFromFixEngineTopicNameParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "Kafka from FIX Engine topic name for the ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "KafkaFromFixEngineTopicName"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": "FROM-FIX-ENGINE"
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
         "KafkaPortParam": {
             "Condition": "",
             "Properties": {
@@ -3379,6 +3677,39 @@
             },
             "Type": "AWS::SSM::Parameter"
         },
+        "KafkaToFixEngineTopicNameParam": {
+            "Condition": "",
+            "Properties": {
+                "Description": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "Kafka to FIX Engine topic name for the ",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            " stack"
+                        ]
+                    ]
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "/",
+                        [
+                            "/fixengine",
+                            {
+                                "Ref": "AWS::StackName"
+                            },
+                            "KafkaToFixEngineTopicName"
+                        ]
+                    ]
+                },
+                "Tier": "Standard",
+                "Type": "String",
+                "Value": "TO-FIX-ENGINE"
+            },
+            "Type": "AWS::SSM::Parameter"
+        },
         "MSKCluster": {
             "DependsOn": [
                 "MSKClusterSecurityGroup",
@@ -3412,9 +3743,14 @@
                     "Ref": "AWS::StackName"
                 },
                 "EncryptionInfo": {
+                    "EncryptionAtRest": {
+                        "DataVolumeKMSKeyId": {
+                            "Ref": "KMSKeyARN"
+                        }
+                    },
                     "EncryptionInTransit": {
                         "ClientBroker": "TLS_PLAINTEXT",
-                        "InCluster": "true"
+                        "InCluster": true
                     }
                 },
                 "KafkaVersion": "2.2.1",
@@ -3480,6 +3816,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "MSKClusterInfoRetrieverRole",
@@ -3496,6 +3841,16 @@
             "DependsOn": [
                 "MSKClusterInfoRetrieverFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -3566,7 +3921,8 @@
             "DependsOn": [
                 "MSKClusterPrepPolicy",
                 "MSKInitializationDocument",
-                "AutomationDocumentStarterLogGroup"
+                "AutomationDocumentStarterLogGroup",
+                "MSKClusterPrepSecurityGroupEgressToMSK"
             ],
             "Properties": {
                 "Properties": {
@@ -3614,7 +3970,7 @@
                 "MSKCluster"
             ],
             "Properties": {
-                "ActionsEnabled": "true",
+                "ActionsEnabled": true,
                 "AlarmActions": [
                     {
                         "Ref": "SNSTopicArn"
@@ -3876,6 +4232,16 @@
             "Type": "AWS::IAM::InstanceProfile"
         },
         "MSKClusterPrepLogGroup": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -3962,15 +4328,25 @@
                 "VPC",
                 "PrimaryPrivateSubnet"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W5",
+                            "reason": "Outbound HTTP(S) traffic is required to download third-party dependencies."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "GroupDescription": "Security Group for MSK Cluster Prep",
                 "SecurityGroupEgress": [
                     {
                         "CidrIp": "0.0.0.0/0",
-                        "Description": "Allow All TCP Traffic",
-                        "FromPort": 1,
+                        "Description": "Allow All HTTPS Traffic",
+                        "FromPort": 443,
                         "IpProtocol": "tcp",
-                        "ToPort": 65535
+                        "ToPort": 443
                     }
                 ],
                 "VpcId": {
@@ -3978,6 +4354,30 @@
                 }
             },
             "Type": "AWS::EC2::SecurityGroup"
+        },
+        "MSKClusterPrepSecurityGroupEgressToMSK": {
+            "DependsOn": [
+                "MSKClusterPrepSecurityGroup"
+            ],
+            "Properties": {
+                "Description": "Allow All TCP Traffic to MSK Cluster",
+                "DestinationSecurityGroupId": {
+                    "Fn::GetAtt": [
+                        "MSKClusterSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "FromPort": 2181,
+                "GroupId": {
+                    "Fn::GetAtt": [
+                        "MSKClusterPrepSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "IpProtocol": "tcp",
+                "ToPort": 2181
+            },
+            "Type": "AWS::EC2::SecurityGroupEgress"
         },
         "MSKClusterSecurityGroup": {
             "DependsOn": [
@@ -4179,8 +4579,22 @@
                                                 ]
                                             ]
                                         },
-                                        "bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING --replication-factor 2 --partitions 1 --topic TO-FIX-ENGINE",
-                                        "bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING --replication-factor 2 --partitions 1 --topic FROM-FIX-ENGINE"
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING --replication-factor 2 --partitions 1 --topic \"TO-FIX-ENGINE\""
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING --replication-factor 2 --partitions 1 --topic \"FROM-FIX-ENGINE\""
+                                                ]
+                                            ]
+                                        }
                                     ]
                                 }
                             },
@@ -4306,6 +4720,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "MiscMethodsHandlerRole",
@@ -4322,6 +4745,16 @@
             "DependsOn": [
                 "MiscMethodsHandlerFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -4530,7 +4963,7 @@
                                 }
                             }
                         ],
-                        "Essential": "true",
+                        "Essential": true,
                         "Image": {
                             "Fn::If": [
                                 "UseDefaultImage",
@@ -4691,7 +5124,7 @@
                                 }
                             }
                         ],
-                        "Essential": "true",
+                        "Essential": true,
                         "Image": {
                             "Fn::If": [
                                 "UseDefaultImage",
@@ -4966,7 +5399,7 @@
                 "CidrBlock": {
                     "Ref": "PrimaryPrivateSubnetCIDR"
                 },
-                "MapPublicIpOnLaunch": "false",
+                "MapPublicIpOnLaunch": false,
                 "Tags": [
                     {
                         "Key": "Name",
@@ -5025,7 +5458,7 @@
                 "CidrBlock": {
                     "Ref": "PrimaryPublicSubnetCIDR"
                 },
-                "MapPublicIpOnLaunch": "false",
+                "MapPublicIpOnLaunch": false,
                 "Tags": [
                     {
                         "Key": "Name",
@@ -5072,9 +5505,9 @@
                 "RDSClusterErrorLogGroup"
             ],
             "Properties": {
-                "AllowMajorVersionUpgrade": "false",
-                "AutoMinorVersionUpgrade": "true",
-                "CopyTagsToSnapshot": "true",
+                "AllowMajorVersionUpgrade": false,
+                "AutoMinorVersionUpgrade": true,
+                "CopyTagsToSnapshot": true,
                 "DBClusterIdentifier": {
                     "Ref": "RDSCluster"
                 },
@@ -5082,10 +5515,10 @@
                 "DBParameterGroupName": {
                     "Ref": "RDSParameterGroup"
                 },
-                "EnablePerformanceInsights": "false",
+                "EnablePerformanceInsights": false,
                 "Engine": "aurora",
-                "MultiAZ": "false",
-                "PubliclyAccessible": "false"
+                "MultiAZ": false,
+                "PubliclyAccessible": false
             },
             "Type": "AWS::RDS::DBInstance"
         },
@@ -5111,7 +5544,7 @@
                 "VPC"
             ],
             "Properties": {
-                "HealthCheckEnabled": "true",
+                "HealthCheckEnabled": true,
                 "Port": {
                     "Ref": "FIXServerPort"
                 },
@@ -5197,10 +5630,19 @@
                     "slowquery",
                     "audit"
                 ],
-                "EnableIAMDatabaseAuthentication": "false",
+                "EnableIAMDatabaseAuthentication": false,
                 "Engine": "aurora",
                 "EngineMode": "multimaster",
                 "EngineVersion": "5.6.10a",
+                "KmsKeyId": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "MasterUserPassword": {
                     "Fn::Join": [
                         "",
@@ -5225,7 +5667,7 @@
                         ]
                     ]
                 },
-                "StorageEncrypted": "true",
+                "StorageEncrypted": true,
                 "Tags": [],
                 "VpcSecurityGroupIds": [
                     {
@@ -5236,6 +5678,16 @@
             "Type": "AWS::RDS::DBCluster"
         },
         "RDSClusterAdminSecret": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W77",
+                            "reason": "No cross-account access to this secret is required."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Description": {
                     "Fn::Join": [
@@ -5251,14 +5703,14 @@
                 },
                 "GenerateSecretString": {
                     "ExcludeCharacters": "\"@/\\,*!#$%-[]()_:^&`<>;+='",
-                    "ExcludeLowercase": "false",
-                    "ExcludeNumbers": "false",
-                    "ExcludePunctuation": "true",
-                    "ExcludeUppercase": "false",
+                    "ExcludeLowercase": false,
+                    "ExcludeNumbers": false,
+                    "ExcludePunctuation": true,
+                    "ExcludeUppercase": false,
                     "GenerateStringKey": "password",
-                    "IncludeSpace": "false",
+                    "IncludeSpace": false,
                     "PasswordLength": 16,
-                    "RequireEachIncludedType": "true",
+                    "RequireEachIncludedType": true,
                     "SecretStringTemplate": "{\"username\": \"FEAdmin\"}"
                 }
             },
@@ -5284,6 +5736,16 @@
             "DependsOn": [
                 "RDSCluster"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -5307,6 +5769,7 @@
             "DependsOn": [
                 "RDSClusterPrepPolicy",
                 "RDSInitializationDocument",
+                "FargateSecurityGroupEgressToRDS",
                 "AutomationDocumentStarterLogGroup"
             ],
             "Properties": {
@@ -5350,6 +5813,16 @@
             "Type": "AWS::CloudFormation::WaitCondition"
         },
         "RDSClusterNonAdminSecret": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W77",
+                            "reason": "No cross-account access to this secret is required."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "Description": {
                     "Fn::Join": [
@@ -5365,14 +5838,14 @@
                 },
                 "GenerateSecretString": {
                     "ExcludeCharacters": "\"@/\\,*!#$%-[]()_:^&`<>;+='",
-                    "ExcludeLowercase": "false",
-                    "ExcludeNumbers": "false",
-                    "ExcludePunctuation": "true",
-                    "ExcludeUppercase": "false",
+                    "ExcludeLowercase": false,
+                    "ExcludeNumbers": false,
+                    "ExcludePunctuation": true,
+                    "ExcludeUppercase": false,
                     "GenerateStringKey": "password",
-                    "IncludeSpace": "false",
+                    "IncludeSpace": false,
                     "PasswordLength": 16,
-                    "RequireEachIncludedType": "true",
+                    "RequireEachIncludedType": true,
                     "SecretStringTemplate": "{\"username\": \"fixengine\"}"
                 }
             },
@@ -5525,7 +5998,7 @@
                                                     ":security-group/",
                                                     {
                                                         "Fn::GetAtt": [
-                                                            "MSKClusterPrepSecurityGroup",
+                                                            "RDSClusterSecurityGroup",
                                                             "GroupId"
                                                         ]
                                                     }
@@ -5684,6 +6157,16 @@
             "Type": "AWS::IAM::InstanceProfile"
         },
         "RDSClusterPrepLogGroup": {
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
@@ -5764,6 +6247,70 @@
                 ]
             },
             "Type": "AWS::IAM::Policy"
+        },
+        "RDSClusterPrepSecurityGroup": {
+            "DependsOn": [
+                "VPC",
+                "PrimaryPrivateSubnet"
+            ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W5",
+                            "reason": "Outbound HTTP(S) traffic is required to download third-party dependencies."
+                        }
+                    ]
+                }
+            },
+            "Properties": {
+                "GroupDescription": "Security Group for RDS Cluster Prep",
+                "SecurityGroupEgress": [
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "Allow All HTTPS Traffic",
+                        "FromPort": 80,
+                        "IpProtocol": "tcp",
+                        "ToPort": 80
+                    },
+                    {
+                        "CidrIp": "0.0.0.0/0",
+                        "Description": "Allow All HTTPS Traffic",
+                        "FromPort": 443,
+                        "IpProtocol": "tcp",
+                        "ToPort": 443
+                    }
+                ],
+                "VpcId": {
+                    "Ref": "VPC"
+                }
+            },
+            "Type": "AWS::EC2::SecurityGroup"
+        },
+        "RDSClusterPrepSecurityGroupEgressToRDS": {
+            "DependsOn": [
+                "RDSClusterSecurityGroup",
+                "RDSClusterPrepSecurityGroup"
+            ],
+            "Properties": {
+                "Description": "Allow TCP Traffic to RDS MySQL",
+                "DestinationSecurityGroupId": {
+                    "Fn::GetAtt": [
+                        "RDSClusterSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "FromPort": 3306,
+                "GroupId": {
+                    "Fn::GetAtt": [
+                        "RDSClusterPrepSecurityGroup",
+                        "GroupId"
+                    ]
+                },
+                "IpProtocol": "tcp",
+                "ToPort": 3306
+            },
+            "Type": "AWS::EC2::SecurityGroupEgress"
         },
         "RDSClusterSecretArnParam": {
             "Condition": "",
@@ -5893,7 +6440,8 @@
                 "RDSClusterAdminSecret",
                 "RDSClusterNonAdminSecret",
                 "RDSClusterPrepExecutionRole",
-                "RDSClusterPrepInstanceRoleProfile"
+                "RDSClusterPrepInstanceRoleProfile",
+                "RDSClusterPrepSecurityGroupEgressToRDS"
             ],
             "Properties": {
                 "Content": {
@@ -5922,7 +6470,7 @@
                                 "MinInstanceCount": 1,
                                 "SecurityGroupIds": [
                                     {
-                                        "Ref": "FargateSecurityGroup"
+                                        "Ref": "RDSClusterPrepSecurityGroup"
                                     }
                                 ],
                                 "SubnetId": {
@@ -5980,8 +6528,8 @@
                                 ],
                                 "Parameters": {
                                     "commands": [
-                                        "sudo apt update",
-                                        "sudo apt install awscli mysql-client jq -y",
+                                        "sudo apt-get update 2>/dev/null",
+                                        "sudo apt-get install awscli mysql-client jq -y 2>/dev/null",
                                         "#sudo yum install jq mysql -y",
                                         {
                                             "Fn::Join": [
@@ -6135,7 +6683,37 @@
                                         },
                                         "NON_ADMIN_DB_USERNAME=$(jq -n -r --argjson data \"$NON_ADMIN_DB_SECRET\" '$data.username')",
                                         "NON_ADMIN_DB_PASSWORD=$(jq -n -r --argjson data \"$NON_ADMIN_DB_SECRET\" '$data.password')",
-                                        "echo \"\nDROP DATABASE IF EXISTS quickfix;\n\nCREATE DATABASE quickfix;\n\nUSE quickfix;\n\n/* Deletes (if necessary) and Creates Non-Admin User */\nCREATE USER '$NON_ADMIN_DB_USERNAME' IDENTIFIED BY '$NON_ADMIN_DB_PASSWORD';\n\nCREATE TABLE sessions (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n  creation_time DATETIME NOT NULL,\n  incoming_seqnum INT NOT NULL, \n  outgoing_seqnum INT NOT NULL,\n  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.sessions TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n  msgseqnum INT NOT NULL, \n  message BLOB NOT NULL,\n  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier, msgseqnum)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_backup_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.messages_backup_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.event_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_backup_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON quickfix.event_backup_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE ActiveEngine  (\n  TS TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  ipAddress VARCHAR(16) NOT NULL,\n  PRIMARY KEY (TS, ipAddress)\n);\nGRANT SELECT, UPDATE ON quickfix.ActiveEngine TO '$NON_ADMIN_DB_USERNAME';\n\nINSERT INTO ActiveEngine VALUES (NOW(), 'none');\n\nDELIMITER //\n\ncreate procedure EngineStatus(IN ipAdd varchar(16), OUT value int, OUT lastIpAdd varchar(16), OUT lastTimestamp DATETIME, OUT timeNow DATETIME, OUT timeDiffSec int)\nBEGIN\n\tSTART TRANSACTION;\n    SET timeNow = NOW();\n    SELECT TS, timestampdiff (second, TS, timeNow), ipAddress INTO lastTimestamp, timeDiffSec, lastIpAdd FROM ActiveEngine;\n    IF timeDiffSec <= 3 AND ipAdd != lastIpAdd THEN            # If another IP is the leader and not stale \n      SET value = 0;                                           # Then I do nothing and keep waiting\n    ELSE \n      UPDATE ActiveEngine SET TS = timeNow, ipAddress = ipAdd; # Else I am going to be the leader (update DB to say this) \n      IF (timeDiffSec > 3) THEN                                #   If the last leader is stale (no matter if it was me or another IP)\n        SET value = -1;                                        #   Then I need to become the new leader\n      ELSE\n        SET value = 1;                                         #   Else I am still the active leader\n      END IF;\n    END IF;\n    COMMIT;\nEND //\n\nDELIMITER ;\n\nGRANT SELECT ON mysql.proc TO '$NON_ADMIN_DB_USERNAME';\nGRANT EXECUTE ON PROCEDURE quickfix.EngineStatus TO '$NON_ADMIN_DB_USERNAME';\n\n\" >> /tmp/rds-cluster-prep.sql",
+                                        "echo \"\nDROP DATABASE IF EXISTS <database-name>;\n\nCREATE DATABASE <database-name>;\n\nUSE <database-name>;\n\n/* Deletes (if necessary) and Creates Non-Admin User */\nCREATE USER '$NON_ADMIN_DB_USERNAME' IDENTIFIED BY '$NON_ADMIN_DB_PASSWORD';\n\nCREATE TABLE sessions (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n  creation_time DATETIME NOT NULL,\n  incoming_seqnum INT NOT NULL, \n  outgoing_seqnum INT NOT NULL,\n  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.sessions TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n  msgseqnum INT NOT NULL, \n  message BLOB NOT NULL,\n  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier, msgseqnum)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_backup_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_backup_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_backup_log (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_backup_log TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE ActiveEngine  (\n  TS TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  ipAddress VARCHAR(16) NOT NULL,\n  PRIMARY KEY (TS, ipAddress)\n);\nGRANT SELECT, UPDATE ON <database-name>.ActiveEngine TO '$NON_ADMIN_DB_USERNAME';\n\nINSERT INTO ActiveEngine VALUES (NOW(), 'none');\n\nDELIMITER //\n\ncreate procedure EngineStatus(IN ipAdd varchar(16), OUT value int, OUT lastIpAdd varchar(16), OUT lastTimestamp DATETIME, OUT timeNow DATETIME, OUT timeDiffSec int)\nBEGIN\n\tSTART TRANSACTION;\n    SET timeNow = NOW();\n    SELECT TS, timestampdiff (second, TS, timeNow), ipAddress INTO lastTimestamp, timeDiffSec, lastIpAdd FROM ActiveEngine;\n    IF timeDiffSec <= 3 AND ipAdd != lastIpAdd THEN            # If another IP is the leader and not stale \n      SET value = 0;                                           # Then I do nothing and keep waiting\n    ELSE \n      UPDATE ActiveEngine SET TS = timeNow, ipAddress = ipAdd; # Else I am going to be the leader (update DB to say this) \n      IF (timeDiffSec > 3) THEN                                #   If the last leader is stale (no matter if it was me or another IP)\n        SET value = -1;                                        #   Then I need to become the new leader\n      ELSE\n        SET value = 1;                                         #   Else I am still the active leader\n      END IF;\n    END IF;\n    COMMIT;\nEND //\n\nDELIMITER ;\n\nGRANT SELECT ON mysql.proc TO '$NON_ADMIN_DB_USERNAME';\nGRANT EXECUTE ON PROCEDURE <database-name>.EngineStatus TO '$NON_ADMIN_DB_USERNAME';\n\n\" >> /tmp/rds-cluster-prep.sql",
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "#sudo sed -i 's/<database-name>/`quickfix-",
+                                                    {
+                                                        "Fn::Select": [
+                                                            2,
+                                                            {
+                                                                "Fn::Split": [
+                                                                    "/",
+                                                                    {
+                                                                        "Ref": "AWS::StackId"
+                                                                    }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    "`/g' /tmp/rds-cluster-prep.sql"
+                                                ]
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    "sudo sed -i 's/<database-name>/`quickfix`/g' /tmp/rds-cluster-prep.sql"
+                                                ]
+                                            ]
+                                        },
                                         {
                                             "Fn::Join": [
                                                 "",
@@ -6256,50 +6834,28 @@
             "Type": "AWS::RDS::DBParameterGroup"
         },
         "RejectFlowLog": {
+            "Condition": "SendLogsToS3",
             "DependsOn": [
                 "RejectTrafficLogGroup",
                 "FlowLogRole"
             ],
             "Properties": {
-                "DeliverLogsPermissionArn": {
-                    "Fn::GetAtt": [
-                        "FlowLogRole",
-                        "Arn"
-                    ]
-                },
                 "LogDestination": {
                     "Fn::Join": [
                         "",
                         [
-                            "arn:aws:logs:",
+                            "arn:aws:s3:::",
                             {
-                                "Ref": "AWS::Region"
+                                "Ref": "S3LogsBucket"
                             },
-                            ":",
+                            "/",
                             {
-                                "Ref": "AWS::AccountId"
-                            },
-                            ":log-group:",
-                            {
-                                "Fn::Join": [
-                                    "/",
-                                    [
-                                        {
-                                            "Ref": "AWS::StackName"
-                                        },
-                                        "vpc",
-                                        {
-                                            "Ref": "VPC"
-                                        },
-                                        "flows",
-                                        "reject"
-                                    ]
-                                ]
+                                "Ref": "S3LogsBucketPrefix"
                             }
                         ]
                     ]
                 },
-                "LogDestinationType": "cloud-watch-logs",
+                "LogDestinationType": "s3",
                 "ResourceId": {
                     "Ref": "VPC"
                 },
@@ -6587,8 +7143,8 @@
                 "CidrBlock": {
                     "Ref": "VpcCIDR"
                 },
-                "EnableDnsHostnames": "true",
-                "EnableDnsSupport": "true",
+                "EnableDnsHostnames": true,
+                "EnableDnsSupport": true,
                 "Tags": [
                     {
                         "Key": "Name",
@@ -6644,6 +7200,15 @@
                     ]
                 },
                 "Handler": "index.handler",
+                "KmsKeyArn": {
+                    "Fn::If": [
+                        "KMSKeySupplied",
+                        {
+                            "Ref": "KMSKeyARN"
+                        },
+                        ""
+                    ]
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "VPCPrefixListManagerRole",
@@ -6660,6 +7225,16 @@
             "DependsOn": [
                 "VPCPrefixListManagerFunction"
             ],
+            "Metadata": {
+                "cfn_nag": {
+                    "rules_to_suppress": [
+                        {
+                            "id": "W84",
+                            "reason": "These logs do not contain sensitive data."
+                        }
+                    ]
+                }
+            },
             "Properties": {
                 "LogGroupName": {
                     "Fn::Join": [
