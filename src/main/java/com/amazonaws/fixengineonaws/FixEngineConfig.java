@@ -142,7 +142,7 @@ public class FixEngineConfig {
     		LOGGER.info("FIXENGINECONFIG GET SSM PARAMETER PATH returning dummy value because we're running on Windows not Unix");
 //    		return new HashMap<String, String>();
     		if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
-    			return "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Prima-JV82REH1OXV5/44c96ca1cc0dceec";
+    			return "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Prima-XXXXXXXXXXXX/XXXXXXXXXXXXXXXX";
     		}
 //          update arn with account number- replace XXXXXXXXXXXX with numbers
     		HashMap<String, String> ret = new HashMap<String, String>();
@@ -155,11 +155,11 @@ public class FixEngineConfig {
     		ret.put("DebugLogging","true");
     		ret.put("FIXServerPort","9877");
     		ret.put("FailoverMSKEndpoint","b-2.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
-    		ret.put("FIXServerDNSName","a98128cf808f6358e.awsglobalaccelerator.com");
+    		ret.put("FIXServerDNSName","XXXXXXXXXXXXXXXXX.awsglobalaccelerator.com");
     		ret.put("ApplicationID","client");
-    		ret.put("RDSClusterSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterAdminSecret-L9C42cRuF7p2-L7HsvC");
-    		ret.put("RDSClusterNonAdminSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterNonAdminSecret-waqyosb9knZt-adX48c");
-    		ret.put("GlobalAcceleratorEndpointGroupArn", "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Failo-BM0E1KC5AQ2K/4df267784903750a");
+    		ret.put("RDSClusterSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterAdminSecret-XXXXXXXXXXXX-XXXXXX");
+    		ret.put("RDSClusterNonAdminSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterNonAdminSecret-XXXXXXXXXXXX-XXXXXX");
+    		ret.put("GlobalAcceleratorEndpointGroupArn", "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Failo-XXXXXXXXXXXX/XXXXXXXXXXXXXXXX");
     		return(ret.get(parameterName));
     	}
 
