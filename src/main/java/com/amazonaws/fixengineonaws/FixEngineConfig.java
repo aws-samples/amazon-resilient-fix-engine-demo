@@ -1,3 +1,4 @@
+//package com.amazonaws.fixengineonaws;
 package com.amazonaws.fixengineonaws;
 
 import java.io.ByteArrayInputStream;
@@ -30,6 +31,8 @@ import quickfix.ConfigError;
 import quickfix.SessionID;
 import quickfix.SessionSettings;
 
+import com.amazonaws.fixengineonaws.RedisSetting;
+
 /**
  * FixEngineConfig: helper class that wraps populates and validates a quickfix.SessionSettings object, overriding any tokens (denoted by <token> syntax) with values from SSM Parameters
  * Retrieves GLOBAL_ACCELERATOR_ENDPOINT_ARN and APPLICATION_STACK_NAME from the Java runtime's OS ENV variables
@@ -40,8 +43,8 @@ public class FixEngineConfig {
     private SessionSettings sessionSettings = null;
     private AWSSimpleSystemsManagement SSM_CLIENT = null;
     private String parameterPath = null;
-    private final String[] requiredClientConfigFields = {"ApplicationID","FileStorePath","ConnectionType","StartTime","EndTime","HeartBtInt","UseDataDictionary","DataDictionary","ValidateUserDefinedFields","ValidateIncomingMessage","RefreshOnLogon","JdbcDriver","JdbcLogHeartBeats","JdbcStoreMessagesTableName","JdbcStoreSessionsTableName","JdbcLogIncomingTable","JdbcLogOutgoingTable","JdbcLogEventTable","JdbcSessionIdDefaultPropertyValue","setMaximumActiveTime","UseJdbcHeartbeat","UseJdbcMessageStore","KafkaOutboundTopicName","KafkaConsumerGroupID","KafkaInboundTopicName","kafkaBootstrapBrokerString","RDSClusterSecretArn","DebugLogging","BeginString","SenderCompID","TargetCompID","SocketConnectHost","SocketConnectPort"};
-    private final String[] requiredServerConfigFields = {"ApplicationID","FileStorePath","ConnectionType","StartTime","EndTime","HeartBtInt","UseDataDictionary","DataDictionary","ValidateUserDefinedFields","ValidateIncomingMessage","RefreshOnLogon","JdbcDriver","JdbcLogHeartBeats","JdbcStoreMessagesTableName","JdbcStoreSessionsTableName","JdbcLogIncomingTable","JdbcLogOutgoingTable","JdbcLogEventTable","JdbcSessionIdDefaultPropertyValue","setMaximumActiveTime","UseJdbcHeartbeat","UseJdbcMessageStore","KafkaOutboundTopicName","KafkaConsumerGroupID","KafkaInboundTopicName","kafkaBootstrapBrokerString","RDSClusterSecretArn","DebugLogging","BeginString","SenderCompID","TargetCompID","GAEndpointGroupArn","GAEndpointArn","SocketAcceptPort","AcceptorTemplate"};
+    private final String[] requiredClientConfigFields = {"ApplicationID","FileStorePath","ConnectionType","StartTime","EndTime","HeartBtInt","UseDataDictionary","DataDictionary","ValidateUserDefinedFields","ValidateIncomingMessage","RefreshOnLogon","UseMemoryDBLeaderLock","UseMemoryDBMessageStore","MemoryDBHost","MemoryDBPort","MemoryDBLeaderLock","MemoryDBLeaderLockDuration","MemoryDBFixToAppQueueName","MemoryDBAppToFixQueueName","DebugLogging","BeginString","SenderCompID","TargetCompID","SocketConnectHost","SocketConnectPort"};
+    private final String[] requiredServerConfigFields = {"ApplicationID","FileStorePath","ConnectionType","StartTime","EndTime","HeartBtInt","UseDataDictionary","DataDictionary","ValidateUserDefinedFields","ValidateIncomingMessage","RefreshOnLogon","UseMemoryDBLeaderLock","UseMemoryDBMessageStore","MemoryDBHost","MemoryDBPort","MemoryDBLeaderLock","MemoryDBLeaderLockDuration","MemoryDBFixToAppQueueName","MemoryDBAppToFixQueueName","DebugLogging","BeginString","SenderCompID","TargetCompID","GAEndpointGroupArn","GAEndpointArn","SocketAcceptPort","AcceptorTemplate"};
     
     /**
      * Constructor initializes a quickfix.SessionSettings object from YAML .cfg file denoted by <configfile> parameter, overrides it with SSM parameters and validates it, throwing an error for any required fields that are missing or can't be detokenized
@@ -57,11 +60,12 @@ public class FixEngineConfig {
 	    sessionSettings = initializeParameters(configfile);
 	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: VALIDATING PARAMETERS: " + sessionSettings);
 	    String validationErrors = validateSessionSettings();
-	    if(!"none".equals(validationErrors)) {
-		    LOGGER.severe("FIXENGINECONFIG CONSTRUCTOR: UNABLE TO START DUE TO CONFIG VALIDATION ERROR: " + validationErrors);
+	    if(validationErrors != null) {
+		    LOGGER.severe("FIXENGINECONFIG CONSTRUCTOR: UNABLE TO START DUE TO CONFIG VALIDATION ERROR: <" + validationErrors + ">");
 		    throw new ConfigError(validationErrors);
 	    }
 	}
+	
 	
 	/**
 	 * Returns populated, detokenized and validated quickfix.SessionSettings object
@@ -144,22 +148,22 @@ public class FixEngineConfig {
     		if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
     			return "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Prima-XXXXXXXXXXXX/XXXXXXXXXXXXXXXX";
     		}
+    		if("GlobalAcceleratorEndpointGroupArn".equals(parameterName)) {
+    			return "DummyGlobalAcceleratorEndpointGroupArn";
+    		}
 //          update arn with account number- replace XXXXXXXXXXXX with numbers
     		HashMap<String, String> ret = new HashMap<String, String>();
     		ret.put("SenderCompID","client");
     		ret.put("ConnectionType","initiator");
-    		ret.put("PrimaryMSKEndpoint","b-1.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
-    		ret.put("KafkaConnTLS","false");
-    		ret.put("TargetCompID","server");
-    		ret.put("KafkaPort","9092");
-    		ret.put("DebugLogging","true");
-    		ret.put("FIXServerPort","9877");
-    		ret.put("FailoverMSKEndpoint","b-2.fixengineonaws-client.pupo46.c6.kafka.us-east-1.amazonaws.com");
-    		ret.put("FIXServerDNSName","XXXXXXXXXXXXXXXXX.awsglobalaccelerator.com");
     		ret.put("ApplicationID","client");
-    		ret.put("RDSClusterSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterAdminSecret-XXXXXXXXXXXX-XXXXXX");
-    		ret.put("RDSClusterNonAdminSecretArn","arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterNonAdminSecret-XXXXXXXXXXXX-XXXXXX");
-    		ret.put("GlobalAcceleratorEndpointGroupArn", "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Failo-XXXXXXXXXXXX/XXXXXXXXXXXXXXXX");
+    		ret.put("TargetCompID","server");
+    		ret.put("DebugLogging","true");
+    		ret.put("MemoryDBHost",RedisSetting.DEFAULT_REDIS_HOST);
+    		ret.put("MemoryDBPort",RedisSetting.DEFAULT_REDIS_PORT);
+    		ret.put("FIXVersion","4.2");
+    		ret.put("FIXServerPort","9877");
+    		ret.put("FIXServerDNSName","XXXXXXXXXXXXXXXXX.awsglobalaccelerator.com");
+    		ret.put("GAEndpointGroupArn", "arn:aws:elasticloadbalancing:us-east-1:XXXXXXXXXXXX:loadbalancer/net/FixEn-Failo-XXXXXXXXXXXX/XXXXXXXXXXXXXXXX");
     		return(ret.get(parameterName));
     	}
 
@@ -189,38 +193,6 @@ public class FixEngineConfig {
         } catch (Exception e) {
             LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER unable to get key : [" + key + "] : " + e);
             throw e;
-        }
-    }
-
-    /**
-     * Enriches sessionSettings object with additional JDBC attributes retrieved from SSM Secrets Manager using the provided ARN (fully qualified, e.g.: "arn:aws:secretsmanager:us-east-1:XXXXXXXXXXXX:secret:RDSClusterAdminSecret-vdIe7YLT6JM2-aw18Xq")
-     * @param secretArn
-     */
-    public void addSqlDbConnectionCoordinatesToSettings(String secretArn) {        
-        LOGGER.info("FIXENGINECONFIG *********************GET SQL DB CONNECTION starting, using ARN: " + secretArn);
-//      AWSSecretsManager client  = System.getProperty("os.name").contains("Windows") ? AWSSecretsManagerClientBuilder.standard().withRegion(Regions.US_EAST_1).build() : AWSSecretsManagerClientBuilder.standard().build();
-        AWSSecretsManager client  = AWSSecretsManagerClientBuilder.standard().build();
-        GetSecretValueRequest getSecretValueRequest = new GetSecretValueRequest().withSecretId(secretArn);
-        GetSecretValueResult getSecretValueResult = null;
-
-        try {
-            getSecretValueResult = client.getSecretValue(getSecretValueRequest);
-        } catch (Exception e) {
-            LOGGER.severe("FIXENGINECONFIG ****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e);
-            e.printStackTrace();
-        }
-
-        String secret = getSecretValueResult.getSecretString();
-//        System.out.println("SECRET JSON: " + secret);
-        JSONParser parser = new JSONParser();
-        try {
-            JSONObject parseResult = (JSONObject)parser.parse(secret);
-            sessionSettings.setString("JdbcUser", parseResult.get("username").toString());
-            sessionSettings.setString("JdbcPassword", parseResult.get("password").toString());
-            sessionSettings.setString("JdbcURL", "jdbc:mysql://" + parseResult.get("host").toString() + ":" + parseResult.get("port").toString() + "/quickfix");            
-        } catch (ParseException e) {
-            LOGGER.severe("FIXENGINECONFIG GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e);
-            e.printStackTrace();
         }
     }
 
@@ -328,7 +300,7 @@ public class FixEngineConfig {
 	    	sessionProperty = findSessionSetting("<", false, sessionSettings);
 	    }
     	
-        // This is a wourkaround for a bug in sessionSettings where simply setting properties in the "session" section 
+        // This is a workaround for a bug in sessionSettings where simply setting properties in the "session" section 
         // gets reflected in the underlying Hashtables and toString() but not in the date it exposes to the Fix SocketAcceptor/SocketInitiator constructor
         // resulting in token strings like "<TargetCompID>" being used by the resulting FIX engine instead of the overridden values
         sessionSettings = cloneSessionSettings(sessionSettings);
@@ -370,14 +342,16 @@ public class FixEngineConfig {
      */
     private String validateSessionSettings() {
     	String[] requiredFields = "initiator".equals(getSessionSetting("ConnectionType")) ? requiredClientConfigFields : requiredServerConfigFields;
-    	String errors = "none";
+    	String errors = null;
     	for(int i=0; i<requiredFields.length; i++) {
     		String name = requiredFields[i];
     		String val = getSessionSetting(name);
     		if(val==null) {
-    			errors += "UNABLE TO FIND REQUIRED SETTING <" + name +"> ";
+    			if(errors==null) { errors=""; }
+    			errors += " UNABLE TO FIND REQUIRED SETTING <" + name +"> ";
     		} else if (val.contains("<") && val.contains(">")) {
-    			errors += "REQUIRED SETTING <" + name +"> STILL CONTAINS TOKENS: <" + val +">";    			
+    			if(errors==null) { errors=""; }
+    			errors += " REQUIRED SETTING <" + name +"> STILL CONTAINS TOKENS: <" + val +"> ";
     		}
     	}
     	return errors;
