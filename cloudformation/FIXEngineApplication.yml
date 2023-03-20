@@ -25,9 +25,6 @@ Conditions:
     - !Equals
       - ''
       - !Ref 'KMSKeyARN'
-  KafkaTLSEnabled: !Equals
-    - 'true'
-    - !Ref 'KafkaConnTLS'
   SendLogsToS3: !Not
     - !Equals
       - ''
@@ -39,6 +36,11 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
+          default: Application
+        Parameters:
+          - GitHubRepoUrl
+          - GitHubRepoBranch
+      - Label:
           default: FIX Configuration
         Parameters:
           - FIXVersion
@@ -47,7 +49,6 @@ Metadata:
           - DebugLogging
           - TargetCompID
           - SenderCompID
-          - KafkaConnTLS
           - ApplicationID
           - CustomImagePath
       - Label:
@@ -85,6 +86,8 @@ Metadata:
         default: FIX Server DNS Name
       FIXVersion:
         default: FIX Version
+      FailoverAvailabilityZoneLetter:
+        default: Failover AZ Letter
       FailoverPrivateSubnet:
         default: Failover Private Subnet
       FailoverPrivateSubnetCIDR:
@@ -93,12 +96,18 @@ Metadata:
         default: Failover Public Subnet
       FailoverPublicSubnetCIDR:
         default: Failover Public Subnet CIDR
+      GitHubRepoBranch:
+        default: GitHub Repo Branch
+      GitHubRepoUrl:
+        default: GitHub Repo URL
       HostedZoneID:
         default: Hosted Zone
       KMSKeyARN:
         default: KMS Key ARN
       LogRetentionInDays:
         default: Log Retention in Days
+      PrimaryAvailabilityZoneLetter:
+        default: Primary AZ Letter
       PrimaryPrivateSubnet:
         default: Primary Private Subnet
       PrimaryPrivateSubnetCIDR:
@@ -119,11 +128,11 @@ Metadata:
         default: VPC
       VpcCIDR:
         default: VPC CIDR
-  Comments: FIX Engine on AWS POC
-  CreatedBy: Carter Meyers
-  Description: FIXEngineOnAWS - v1.37
-  LastUpdated: August 06, 2021
-  Version: v1.37
+  Comments: ''
+  CreatedBy: Carter Meyers (AWS)
+  Description: This application deploys a highly resilient FIX Engine application on AWS.
+  LastUpdated: March 20, 2023
+  Version: v2.0
 Outputs:
   ApplicationID:
     Condition: ''
@@ -133,7 +142,15 @@ Outputs:
     Value: !Ref 'ConnectionType'
   DatabaseName:
     Condition: ''
-    Value: quickfix
+    Value: !Join
+      - ''
+      - - quickfix-
+        - !Select
+          - 2
+          - !Split
+            - /
+            - !Ref 'AWS::StackId'
+        - ;
   DebugLogging:
     Condition: ''
     Value: !Ref 'DebugLogging'
@@ -156,9 +173,6 @@ Outputs:
       - !Split
         - .
         - !Ref 'FIXVersion'
-  FailoverMSKEndpoint:
-    Condition: ''
-    Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
   GlobalAcceleratorArn:
     Condition: IsAcceptorStack
     Value: !GetAtt 'GlobalAccelerator.AcceleratorArn'
@@ -170,34 +184,13 @@ Outputs:
     Value: !GetAtt 'GlobalAcceleratorEndpointGroup.EndpointGroupArn'
   GlobalAcceleratorIPAddresses:
     Condition: IsAcceptorStack
-    Value: !GetAtt 'GlobalAcceleratorInfoRetriever.IPAddresses'
-  KafkaConnTLS:
+    Value: !GetAtt 'GlobalAcceleratorInfoRetrieverResource.IPAddresses'
+  MemoryDBHost:
     Condition: ''
-    Value: !Ref 'KafkaConnTLS'
-  KafkaConsumerGroupID:
+    Value: !GetAtt 'MemoryDbCluster.ClusterEndpoint.Address'
+  MemoryDBPort:
     Condition: ''
-    Value: fixengine-consumer
-  KafkaFromFixEngineTopicName:
-    Condition: ''
-    Value: FROM-FIX-ENGINE
-  KafkaPort:
-    Condition: ''
-    Value: !If
-      - KafkaTLSEnabled
-      - '9094'
-      - '9092'
-  KafkaToFixEngineTopicName:
-    Condition: ''
-    Value: TO-FIX-ENGINE
-  PrimaryMSKEndpoint:
-    Condition: ''
-    Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-  RDSClusterNonAdminSecretArn:
-    Condition: ''
-    Value: !Ref 'RDSClusterNonAdminSecret'
-  RDSClusterSecretArn:
-    Condition: ''
-    Value: !Ref 'RDSClusterAdminSecret'
+    Value: '6379'
   SenderCompID:
     Condition: ''
     Value: !Ref 'SenderCompID'
@@ -214,15 +207,12 @@ Parameters:
       - acceptor
       - initiator
     Default: acceptor
-    Description: The engine role to be deployed - acceptor for server, initiator for
-      client
+    Description: The engine role to be deployed - acceptor for server, initiator for client
     Type: String
   CustomImagePath:
     Default: ''
-    Description: "[Optional] This CloudFormation stack will create a Docker image\
-      \ to be used by ECS. If you wish to use your own image, specify the path here.\
-      \ \n        Up to 255 letters (uppercase and lowercase), numbers, hyphens, underscores,\
-      \ colons, periods, forward slashes, and number signs are allowed."
+    Description: "[Optional] This CloudFormation stack will create a Docker image to be used by ECS. If you wish to use your own image, specify the path here. \n            Up to 255 letters (uppercase\
+      \ and lowercase), numbers, hyphens, underscores, colons, periods, forward slashes, and number signs are allowed."
     Type: String
   DebugLogging:
     AllowedValues:
@@ -233,13 +223,11 @@ Parameters:
     Type: String
   FIXClientCIDRs:
     Default: 10.10.0.0/20
-    Description: The comma-delimited external CIDR ranges that should be granted access
-      to your ingestion endpoint. (Max. 5)
+    Description: The comma-delimited external CIDR ranges that should be granted access to your ingestion endpoint. (Max. 5)
     Type: CommaDelimitedList
   FIXServerDNSName:
     Default: ''
-    Description: If you are the acceptor, this will be the domain name created that
-      points to your Global Accelerator Endpoint (e.g., fix.example.com)
+    Description: If you are the acceptor, this will be the domain name created that points to your Global Accelerator Endpoint (e.g., fix.example.com)
     Type: String
   FIXServerPort:
     Default: 9877
@@ -259,32 +247,28 @@ Parameters:
     Description: The desired FIX engine version.
     Type: String
   FailoverPrivateSubnet:
-    Description: The private subnet you wish to use for your failover compute and
-      data resources.
+    Description: The private subnet you wish to use for your failover compute and data resources.
     Type: AWS::EC2::Subnet::Id
   FailoverPublicSubnet:
-    Description: The public subnet you wish to use for your failover Network Load
-      Balancer.
+    Description: The public subnet you wish to use for your failover Network Load Balancer.
     Type: AWS::EC2::Subnet::Id
+  GitHubRepoBranch:
+    Default: '2.0'
+    Description: The branch of the above GitHub repo to use for the Docker container build.
+    Type: String
+  GitHubRepoUrl:
+    Default: https://github.com/aws-samples/amazon-resilient-fix-engine-demo.git
+    Description: The GitHub repo containing the code used to build the Fargate Docker container.
+    Type: String
   HostedZoneID:
     Default: ''
-    Description: '[Required for Acceptor Stack] If you are the acceptor, this should
-      be the Hosted Zone ID for the domain hosted in Route53.'
+    Description: '[Required for Acceptor Stack] If you are the acceptor, this should be the Hosted Zone ID for the domain hosted in Route53.'
     Type: String
   KMSKeyARN:
     Default: ''
     Description: >-
-      [Optional] The ARN of the KMS key you wish to use for data encrypion. Warning:
-      Adding or changing the KMS key once the stack has been deployed may require
-      resources to be recreated (e.g., DB & MSK Clusters), and thus may lead to data
-      loss.
-    Type: String
-  KafkaConnTLS:
-    AllowedValues:
-      - 'true'
-      - 'false'
-    Default: 'false'
-    Description: Choose True to enable TLS encryption for your Kafka connection
+      [Optional] The ARN of the KMS key you wish to use for data encrypion. Warning: Adding or changing the KMS key once the stack has been deployed may require resources to be recreated, and may thus result
+      in data loss.
     Type: String
   LogRetentionInDays:
     AllowedValues:
@@ -301,8 +285,7 @@ Parameters:
     Description: The number of days CloudWatch-bound application logs should be kept.
     Type: String
   PrimaryPrivateSubnet:
-    Description: The private subnet you wish to use for your primary compute and data
-      resources.
+    Description: The private subnet you wish to use for your primary compute and data resources.
     Type: AWS::EC2::Subnet::Id
   PrimaryPublicSubnet:
     Description: The public subnet you wish to use for your primary Network Load Balancer.
@@ -310,19 +293,15 @@ Parameters:
   S3LogsBucket:
     Default: ''
     Description: >-
-      [Optional] The S3 Bucket you wish to use for S3-bound application logs (e.g.,
-      Network Load Balancer). Please ensure your bucket policy is configured to allow
-      delivery from your NLBs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html#access-logging-bucket-permissions
+      [Optional] The S3 Bucket you wish to use for S3-bound application logs (e.g., Network Load Balancer). Please ensure your bucket policy is configured to allow delivery from your NLBs: https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html#access-logging-bucket-permissions
     Type: String
   S3LogsBucketPrefix:
-    Default: hello
-    Description: '[Optional] The S3 Key prefix you wish to use for S3-bound application
-      logs.'
+    Default: ''
+    Description: '[Optional] The S3 Key prefix you wish to use for S3-bound application logs.'
     Type: String
   SNSTopicArn:
     Default: ''
-    Description: '[Optional] The SNS Topic ARN you would like alerts sent to related
-      to the resources in this stack.'
+    Description: '[Optional] The SNS Topic ARN you would like alerts sent to related to the resources in this stack.'
     Type: String
   SenderCompID:
     Default: server
@@ -334,8 +313,7 @@ Parameters:
     Type: String
   UserApplicationCIDRs:
     Default: 10.10.0.0/20
-    Description: The comma-delimited private CIDR ranges corresponding to the user
-      application that should be granted access to your MSK endpoint. (Max. 5)
+    Description: The comma-delimited private CIDR ranges corresponding to the user application that should be granted access to your MSK endpoint. (Max. 5)
     Type: CommaDelimitedList
   VPC:
     Description: The VPC into which these resources should be launched.
@@ -346,7 +324,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'FIX Application ID for '
+        - - 'FIX Application ID for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -358,81 +336,47 @@ Resources:
       Type: String
       Value: !Ref 'ApplicationID'
     Type: AWS::SSM::Parameter
-  AutomationDocumentStarterFunction:
-    Condition: ''
+  AutomationDocumentStarter:
     DependsOn:
       - AutomationDocumentStarterRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
+      Architectures:
+        - x86_64
       Code:
-        ZipFile: "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\n\
-          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
-          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\nssm_client = boto3.client('ssm')\n\
-          \ndef start_document(properties):\n    \n    try:\n        \n        response\
-          \ = ssm_client.start_automation_execution(\n            Parameters = {\n\
-          \                'ExecutionRoleArn': [\n                    properties['ExecutionRoleArn']\n\
-          \                ]\n            },\n            DocumentName = properties['AutomationDocumentName'],\n\
-          \        )\n    \n        return True\n    \n    except ClientError as e:\n\
-          \        print(str(e)); return False\n\n'''\n    - ExecutionRoleArn | str\n\
-          \    - EligibleRequestTypes | list\n    - AutomationDocumentName | str\n\
-          '''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED\
-          \ -----')\n    LOGGER.info(json.dumps(event))\n    \n    responseData =\
-          \ {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ 'EligibleRequestTypes' not in properties:\n        properties['EligibleRequestTypes']\
-          \ = ['Create']\n    \n    if event['RequestType'] in properties['EligibleRequestTypes']:\n\
-          \        \n        attempt_cnt = 0\n        while attempt_cnt < 5:\n   \
-          \         \n            if attempt_cnt > 0:\n                time.sleep(10)\n\
-          \            \n            if start_document(properties) is True:\n    \
-          \            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData, properties['AutomationDocumentName'])\n        \n      \
-          \      attempt_cnt += 1\n            \n        return cfnresponse.send(event,\
-          \ context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType']\
-          \ not in properties['EligibleRequestTypes']:\n        \n        return cfnresponse.send(event,\
-          \ context, cfnresponse.SUCCESS, responseData)"
-      Description: !Join
-        - ''
-        - - 'AutomationDocumentStarter resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
+        ZipFile: "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\
+          logging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\nssm_client = boto3.client('ssm')\n\ndef start_document(properties):\n    \n    try:\n\
+          \        \n        response = ssm_client.start_automation_execution(\n            Parameters = {\n                'ExecutionRoleArn': [\n                    properties['ExecutionRoleArn']\n  \
+          \              ]\n            },\n            DocumentName = properties['AutomationDocumentName'],\n        )\n    \n        return True\n    \n    except ClientError as e:\n        print(str(e));\
+          \ return False\n\n'''\n    - ExecutionRoleArn | str\n    - EligibleRequestTypes | list\n    - AutomationDocumentName | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
+          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n    \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n\
+          \    \n    if 'EligibleRequestTypes' not in properties:\n        properties['EligibleRequestTypes'] = ['Create']\n    \n    if event['RequestType'] in properties['EligibleRequestTypes']:\n   \
+          \     \n        attempt_cnt = 0\n        while attempt_cnt < 5:\n            \n            if attempt_cnt > 0:\n                time.sleep(10)\n            \n            if start_document(properties)\
+          \ is True:\n                return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['AutomationDocumentName'])\n        \n            attempt_cnt += 1\n         \
+          \   \n        return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType'] not in properties['EligibleRequestTypes']:\n        \n        return\
+          \ cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
+      Description: ''
       Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
+      Layers: []
+      MemorySize: 128
       Role: !GetAtt 'AutomationDocumentStarterRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.9
       Timeout: 180
+      TracingConfig:
+        Mode: PassThrough
     Type: AWS::Lambda::Function
   AutomationDocumentStarterLogGroup:
-    Condition: ''
+    DeletionPolicy: Delete
     DependsOn:
-      - AutomationDocumentStarterFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
+      - AutomationDocumentStarter
     Properties:
       LogGroupName: !Join
         - ''
         - - /aws/lambda/
-          - !Ref 'AutomationDocumentStarterFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
+          - !Ref 'AutomationDocumentStarter'
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   AutomationDocumentStarterRole:
-    Condition: ''
     DependsOn: []
-    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -444,44 +388,85 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
       Policies: []
     Type: AWS::IAM::Role
+  AutomationDocumentStarterRoleECSImageBuildPolicy:
+    DependsOn:
+      - AutomationDocumentStarterRole
+      - ECSImageBuildDocument
+      - ECSImageBuildExecutionRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Effect: Allow
+            Resource:
+              - !GetAtt 'ECSImageBuildExecutionRole.Arn'
+          - Action:
+              - ssm:StartAutomationExecution
+            Effect: Allow
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:ssm:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - :automation-definition/
+                  - !Ref 'ECSImageBuildDocument'
+                  - :$DEFAULT
+      PolicyName: ECSImageBuildPolicy
+      Roles:
+        - !Ref 'AutomationDocumentStarterRole'
+    Type: AWS::IAM::Policy
+  AutomationDocumentStarterRolemainpolicy:
+    DependsOn:
+      - AutomationDocumentStarterRole
+      - ECSImageBuildDocument
+      - ECSImageBuildExecutionRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+            Effect: Allow
+            Resource:
+              - !GetAtt 'ECSImageBuildExecutionRole.Arn'
+          - Action:
+              - ssm:StartAutomationExecution
+            Effect: Allow
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:ssm:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - :automation-definition/
+                  - !Ref 'ECSImageBuildDocument'
+                  - :$DEFAULT
+      PolicyName: main-policy
+      Roles:
+        - !Ref 'AutomationDocumentStarterRole'
+    Type: AWS::IAM::Policy
   CloudWatchDashboard:
     Properties:
       DashboardBody: !Sub
-        - "{\n   \"start\": \"-PT3H\",\n   \"periodOverride\": \"inherit\",\n    \"\
-          widgets\": [\n        {\n            \"type\": \"metric\",\n           \
-          \ \"properties\": {\n                \"view\": \"timeSeries\",\n       \
-          \         \"width\": 20,\n                \"height\": 12,\n            \
-          \    \"title\": \"Fargate Resource Utlization\",\n                \"period\"\
-          : 300,\n                \"stacked\": false,\n                \"metrics\"\
-          : [\n                    [\n                        \"AWS/ECS\", \n    \
-          \                    \"MemoryUtilization\", \n                        \"\
-          ServiceName\", \n                        \"${PRIMARY_ECS_SERVICE_NAME}\"\
-          ,\n                        \"ClusterName\", \n                        \"\
-          ${PRIMARY_ECS_CLUSTER_NAME}\",\n                        {\n            \
-          \                \"label\": \"PrimaryMemUtilization\"\n                \
-          \        }\n                    ],\n                    [ \n           \
-          \             \"AWS/ECS\", \n                        \"CPUUtilization\"\
-          , \n                        \"ServiceName\", \n                        \"\
-          ${PRIMARY_ECS_SERVICE_NAME}\",\n                        \"ClusterName\"\
-          , \n                        \"${PRIMARY_ECS_CLUSTER_NAME}\",\n         \
-          \               {\n                            \"label\": \"PrimaryCPUUtilization\"\
-          \n                        }\n                    ],\n                  \
-          \  [\n                        \"AWS/ECS\", \n                        \"\
-          MemoryUtilization\", \n                        \"ServiceName\", \n     \
-          \                   \"${FAILOVER_ECS_SERVICE_NAME}\",\n                \
-          \        \"ClusterName\", \n                        \"${FAILOVER_ECS_CLUSTER_NAME}\"\
-          ,\n                        {\n                            \"label\": \"\
-          FailoverMemUtilization\"\n                        }\n                  \
-          \  ],\n                    [ \n                        \"AWS/ECS\", \n \
-          \                       \"CPUUtilization\", \n                        \"\
-          ServiceName\", \n                        \"${FAILOVER_ECS_SERVICE_NAME}\"\
-          ,\n                        \"ClusterName\", \n                        \"\
-          ${FAILOVER_ECS_CLUSTER_NAME}\",\n                        {\n           \
-          \                 \"label\": \"FailoverCPUUtilization\"\n              \
-          \          }\n                    ]\n                ],\n              \
-          \  \"region\": \"us-east-1\"\n            }\n        }\n    ]\n}"
+        - "{\n   \"start\": \"-PT3H\",\n   \"periodOverride\": \"inherit\",\n    \"widgets\": [\n        {\n            \"type\": \"metric\",\n            \"properties\": {\n                \"view\": \"\
+          timeSeries\",\n                \"width\": 20,\n                \"height\": 12,\n                \"title\": \"Fargate Resource Utlization\",\n                \"period\": 300,\n                \"\
+          stacked\": false,\n                \"metrics\": [\n                    [\n                        \"AWS/ECS\", \n                        \"MemoryUtilization\", \n                        \"ServiceName\"\
+          , \n                        \"${PRIMARY_ECS_SERVICE_NAME}\",\n                        \"ClusterName\", \n                        \"${PRIMARY_ECS_CLUSTER_NAME}\",\n                        {\n \
+          \                           \"label\": \"PrimaryMemUtilization\"\n                        }\n                    ],\n                    [ \n                        \"AWS/ECS\", \n           \
+          \             \"CPUUtilization\", \n                        \"ServiceName\", \n                        \"${PRIMARY_ECS_SERVICE_NAME}\",\n                        \"ClusterName\", \n           \
+          \             \"${PRIMARY_ECS_CLUSTER_NAME}\",\n                        {\n                            \"label\": \"PrimaryCPUUtilization\"\n                        }\n                    ],\n\
+          \                    [\n                        \"AWS/ECS\", \n                        \"MemoryUtilization\", \n                        \"ServiceName\", \n                        \"${FAILOVER_ECS_SERVICE_NAME}\"\
+          ,\n                        \"ClusterName\", \n                        \"${FAILOVER_ECS_CLUSTER_NAME}\",\n                        {\n                            \"label\": \"FailoverMemUtilization\"\
+          \n                        }\n                    ],\n                    [ \n                        \"AWS/ECS\", \n                        \"CPUUtilization\", \n                        \"ServiceName\"\
+          , \n                        \"${FAILOVER_ECS_SERVICE_NAME}\",\n                        \"ClusterName\", \n                        \"${FAILOVER_ECS_CLUSTER_NAME}\",\n                        {\n\
+          \                            \"label\": \"FailoverCPUUtilization\"\n                        }\n                    ]\n                ],\n                \"region\": \"us-east-1\"\n          \
+          \  }\n        }\n    ]\n}"
         - FAILOVER_ECS_CLUSTER_NAME: !Ref 'FailoverECSCluster'
           FAILOVER_ECS_SERVICE_NAME: !If
             - IsInitiatorStack
@@ -515,7 +500,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'FIX engine MySQL database name for '
+        - - 'FIX engine MySQL database name for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -525,7 +510,15 @@ Resources:
           - DatabaseName
       Tier: Standard
       Type: String
-      Value: quickfix
+      Value: !Join
+        - ''
+        - - quickfix-
+          - !Select
+            - 2
+            - !Split
+              - /
+              - !Ref 'AWS::StackId'
+          - ;
     Type: AWS::SSM::Parameter
   DebugLoggingParam:
     Condition: ''
@@ -551,8 +544,7 @@ Resources:
       cfn_nag:
         rules_to_suppress:
           - id: W28
-            reason: ECR does not allow capital letters in repository names which is
-              why we must sanitize/lowercase the auto-generated name.
+            reason: ECR does not allow capital letters in repository names which is why we must sanitize/lowercase the auto-generated name.
     Properties:
       EncryptionConfiguration: !If
         - KMSKeySupplied
@@ -622,20 +614,31 @@ Resources:
                 - '{{LaunchInstance.InstanceIds}}'
               Parameters:
                 commands:
-                  - sudo yum update
-                  - sudo yum install jq git docker java-1.8.0-openjdk-devel -y
+                  - sudo yum update -y
+                  - sudo yum install jq git docker java-11-amazon-corretto-devel -y
                   - '# Installs Gradle'
-                  - sudo wget -c https://services.gradle.org/distributions/gradle-6.6.1-all.zip
-                  - sudo unzip gradle-6.6.1-all.zip -d /opt
-                  - sudo ln -s /opt/gradle-6.6.1 /opt/gradle
+                  - sudo wget -c https://services.gradle.org/distributions/gradle-6.9.4-all.zip
+                  - sudo unzip gradle-6.9.4-all.zip -d /opt
+                  - sudo ln -s /opt/gradle-6.9.4 /opt/gradle
                   - export GRADLE_HOME=/opt/gradle
                   - export PATH=$PATH:\/opt/gradle/bin
                   - cd /tmp
-                  - git clone https://github.com/aws-samples/amazon-resilient-fix-engine-demo.git
+                  - !Join
+                    - ''
+                    - - 'git clone '
+                      - !Ref 'GitHubRepoUrl'
                   - cd amazon-resilient-fix-engine-demo
                   - !Join
+                    - ''
+                    - - 'git checkout '
+                      - !Ref 'GitHubRepoBranch'
+                  - !Join
                     - ' '
-                    - - sh scripts/dockerbuild.sh --ecr-repo-name
+                    - - sh scripts/dockerbuild.sh --region
+                      - !Ref 'AWS::Region'
+                      - --account-id
+                      - !Ref 'AWS::AccountId'
+                      - --ecr-repo-name
                       - !Ref 'ECRRepository'
                       - --engine-role
                       - !If
@@ -833,36 +836,6 @@ Resources:
           - ECSImageBuild
       RetentionInDays: !Ref 'LogRetentionInDays'
     Type: AWS::Logs::LogGroup
-  ECSImageBuildPolicy:
-    DependsOn:
-      - AutomationDocumentStarterRole
-      - ECSImageBuildDocument
-      - ECSImageBuildExecutionRole
-    Properties:
-      PolicyDocument:
-        Statement:
-          - Action:
-              - iam:PassRole
-            Effect: Allow
-            Resource:
-              - !GetAtt 'ECSImageBuildExecutionRole.Arn'
-          - Action:
-              - ssm:StartAutomationExecution
-            Effect: Allow
-            Resource:
-              - !Join
-                - ''
-                - - 'arn:aws:ssm:'
-                  - !Ref 'AWS::Region'
-                  - ':'
-                  - !Ref 'AWS::AccountId'
-                  - :automation-definition/
-                  - !Ref 'ECSImageBuildDocument'
-                  - :$DEFAULT
-      PolicyName: ECSImageBuildPolicy
-      Roles:
-        - !Ref 'AutomationDocumentStarterRole'
-    Type: AWS::IAM::Policy
   ECSImageBuildSecurityGroup:
     DependsOn: []
     Metadata:
@@ -888,7 +861,7 @@ Resources:
   ECSImageBuildStarter:
     DependsOn:
       - ECRRepository
-      - ECSImageBuildPolicy
+      - AutomationDocumentStarterRoleECSImageBuildPolicy
       - ECSImageBuildDocument
       - AutomationDocumentStarterLogGroup
     Properties:
@@ -899,8 +872,8 @@ Resources:
           - Update
         ExecutionRoleArn: !GetAtt 'ECSImageBuildExecutionRole.Arn'
         RepositoryName: !Ref 'ECRRepository'
-        TemplateVersion: '1.37'
-      ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
+        TemplateVersion: '1'
+      ServiceToken: !GetAtt 'AutomationDocumentStarter.Arn'
       Type: Custom::StartSSMAutomationDocument
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
@@ -910,96 +883,62 @@ Resources:
         Count: 1
         Timeout: PT20M
     DependsOn:
-      - ECSImageBuildPolicy
+      - AutomationDocumentStarterRoleECSImageBuildPolicy
       - ECSImageBuildDocument
       - AutomationDocumentStarterLogGroup
     Type: AWS::CloudFormation::WaitCondition
   ECSImageRemover:
     DependsOn:
-      - ECRRepository
-      - ECSImageRemoverLogGroup
-    Properties:
-      Properties:
-        RepositoryName: !Ref 'ECRRepository'
-      ServiceToken: !GetAtt 'ECSImageRemoverFunction.Arn'
-      Type: Custom::ECSImageRemover
-      Version: '1.0'
-    Type: AWS::CloudFormation::CustomResource
-  ECSImageRemoverFunction:
-    Condition: ''
-    DependsOn:
       - ECSImageRemoverRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
+      Architectures:
+        - x86_64
       Code:
-        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
-          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
-          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - RepositoryName\
-          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
-          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
-          \ = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ event['RequestType'] in ['Delete']:\n        \n        ecr_client = boto3.client('ecr')\n\
-          \n        try:\n            \n            existing_images = ecr_client.describe_images(\n\
-          \                repositoryName = properties['RepositoryName']\n       \
-          \     )\n            \n            if len(existing_images['imageDetails'])\
-          \ > 0:\n                \n                images_to_delete = []\n      \
-          \          for image in existing_images['imageDetails']:\n             \
-          \       \n                    images_to_delete.append({\n              \
-          \          'imageDigest': image['imageDigest']\n                    })\n\
-          \                    \n                ecr_client.batch_delete_image(\n\
-          \                    repositoryName = properties['RepositoryName'],\n  \
-          \                  imageIds = images_to_delete\n                )\n    \
-          \            \n            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData, properties['RepositoryName'])\n            \n        except\
-          \ ClientError as e:\n        \n            print(str(e))\n            return\
-          \ cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n \
-          \   \n    elif event['RequestType'] in ['Create', 'Update']:\n        \n\
-          \        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
-      Description: !Join
-        - ''
-        - - 'ECSImageRemover resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
+        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - RepositoryName | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\
+          \n    responseData = {}\n\n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n    \n    if event['RequestType']\
+          \ in ['Delete']:\n        \n        ecr_client = boto3.client('ecr')\n\n        try:\n            \n            existing_images = ecr_client.describe_images(\n                repositoryName =\
+          \ properties['RepositoryName']\n            )\n            \n            if len(existing_images['imageDetails']) > 0:\n                \n                images_to_delete = []\n               \
+          \ for image in existing_images['imageDetails']:\n                    \n                    images_to_delete.append({\n                        'imageDigest': image['imageDigest']\n            \
+          \        })\n                    \n                ecr_client.batch_delete_image(\n                    repositoryName = properties['RepositoryName'],\n                    imageIds = images_to_delete\n\
+          \                )\n                \n            return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['RepositoryName'])\n            \n        except ClientError\
+          \ as e:\n        \n            print(str(e))\n            return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n    \n    elif event['RequestType'] in ['Create', 'Update']:\n\
+          \        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)"
+      Description: ''
       Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
+      Layers: []
+      MemorySize: 128
       Role: !GetAtt 'ECSImageRemoverRole.Arn'
-      Runtime: python3.7
-      Timeout: 15
+      Runtime: python3.9
+      Timeout: 60
+      TracingConfig:
+        Mode: PassThrough
     Type: AWS::Lambda::Function
   ECSImageRemoverLogGroup:
-    Condition: ''
+    DeletionPolicy: Delete
     DependsOn:
-      - ECSImageRemoverFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
+      - ECSImageRemover
     Properties:
       LogGroupName: !Join
         - ''
         - - /aws/lambda/
-          - !Ref 'ECSImageRemoverFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
+          - !Ref 'ECSImageRemover'
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
-  ECSImageRemoverRole:
-    Condition: ''
+  ECSImageRemoverResource:
     DependsOn:
       - ECRRepository
-    Metadata: {}
+      - ECSImageRemover
+      - ECSImageRemoverLogGroup
+    Properties:
+      Properties:
+        RepositoryName: !Ref 'ECRRepository'
+      ServiceToken: !GetAtt 'ECSImageRemover.Arn'
+      Type: Custom::ECSImageRemover
+      Version: '1.0'
+    Type: AWS::CloudFormation::CustomResource
+  ECSImageRemoverRole:
+    DependsOn: []
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1011,6 +950,7 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
       Policies:
         - PolicyDocument:
             Statement:
@@ -1020,7 +960,7 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !GetAtt 'ECRRepository.Arn'
-          PolicyName: PrimaryPolicy
+          PolicyName: main-policy
     Type: AWS::IAM::Role
   FIXClientPrefixListUpdater:
     DependsOn:
@@ -1035,7 +975,7 @@ Resources:
             - !Ref 'AWS::StackName'
             - ' stack'
         PrefixListId: !Ref 'FIXClientVPCPrefixList'
-      ServiceToken: !GetAtt 'VPCPrefixListManagerFunction.Arn'
+      ServiceToken: !GetAtt 'VPCPrefixListManager.Arn'
       Type: Custom::UpdateFIXClientPrefixList
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
@@ -1054,7 +994,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'Socket connection host for '
+        - - 'Socket connection host for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1091,7 +1031,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'FIX engine version as integer for '
+        - - 'FIX engine version as integer for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1112,7 +1052,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'FIX engine version for '
+        - - 'FIX engine version for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1154,18 +1094,12 @@ Resources:
       - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
-      - FargateExecutionRole
-      - MSKClusterInfoRetriever
-      - RDSClusterNonAdminSecret
       - ECSImageBuildWaiter
+      - FargateExecutionRole
       - GlobalAccelerator
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: PRIMARY_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-            - Name: FAILOVER_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
             - Name: GLOBAL_ACCELERATOR_ARN
@@ -1236,17 +1170,11 @@ Resources:
       - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
-      - FargateExecutionRole
-      - MSKClusterInfoRetriever
-      - RDSClusterNonAdminSecret
       - ECSImageBuildWaiter
+      - FargateExecutionRole
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: PRIMARY_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-            - Name: FAILOVER_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
           Essential: true
@@ -1281,23 +1209,6 @@ Resources:
         - FARGATE
       TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
     Type: AWS::ECS::TaskDefinition
-  FailoverMSKEndpointParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Failover MSK endpoint FQDN for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - FailoverMSKEndpoint
-      Tier: Standard
-      Type: String
-      Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
-    Type: AWS::SSM::Parameter
   FailoverNLB:
     Condition: IsAcceptorStack
     DependsOn: []
@@ -1331,23 +1242,6 @@ Resources:
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
     Type: AWS::ElasticLoadBalancingV2::Listener
-  FailoverRDSInstance:
-    DependsOn:
-      - RDSCluster
-      - RDSParameterGroup
-      - RDSClusterErrorLogGroup
-    Properties:
-      AllowMajorVersionUpgrade: false
-      AutoMinorVersionUpgrade: true
-      CopyTagsToSnapshot: true
-      DBClusterIdentifier: !Ref 'RDSCluster'
-      DBInstanceClass: db.r4.2xlarge
-      DBParameterGroupName: !Ref 'RDSParameterGroup'
-      EnablePerformanceInsights: false
-      Engine: aurora
-      MultiAZ: false
-      PubliclyAccessible: false
-    Type: AWS::RDS::DBInstance
   FailoverTargetGroup:
     Condition: IsAcceptorStack
     DependsOn: []
@@ -1411,17 +1305,6 @@ Resources:
           IpProtocol: tcp
           ToPort: 443
         - CidrIp: '0.0.0.0/0'
-          Description: Kafka Traffic
-          FromPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
-          IpProtocol: tcp
-          ToPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
-        - CidrIp: '0.0.0.0/0'
           Description: FIX Server Traffic
           FromPort: !Ref 'FIXServerPort'
           IpProtocol: tcp
@@ -1445,20 +1328,7 @@ Resources:
           ToPort: !Ref 'FIXServerPort'
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
-  FargateSecurityGroupEgressToRDS:
-    DependsOn:
-      - FargateSecurityGroup
-    Properties:
-      Description: Allow Database Traffic to RDS
-      DestinationSecurityGroupId: !GetAtt 'RDSClusterSecurityGroup.GroupId'
-      FromPort: 3306
-      GroupId: !GetAtt 'FargateSecurityGroup.GroupId'
-      IpProtocol: tcp
-      ToPort: 3306
-    Type: AWS::EC2::SecurityGroupEgress
   FargateTaskRole:
-    DependsOn:
-      - RDSClusterNonAdminSecret
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1468,37 +1338,9 @@ Resources:
             Principal:
               Service:
                 - ecs-tasks.amazonaws.com
-      ManagedPolicyArns: []
       Policies:
         - PolicyDocument:
             Statement:
-              - Action:
-                  - secretsmanager:GetSecretValue
-                Effect: Allow
-                Resource:
-                  - !Join
-                    - '-'
-                    - - !Select
-                        - 0
-                        - !Split
-                          - '-'
-                          - !Ref 'RDSClusterNonAdminSecret'
-                      - !Select
-                        - 1
-                        - !Split
-                          - '-'
-                          - !Ref 'RDSClusterNonAdminSecret'
-                      - !Select
-                        - 2
-                        - !Split
-                          - '-'
-                          - !Ref 'RDSClusterNonAdminSecret'
-                      - !Select
-                        - 3
-                        - !Split
-                          - '-'
-                          - !Ref 'RDSClusterNonAdminSecret'
-                  - !Ref 'RDSClusterNonAdminSecret'
               - Action:
                   - ssm:GetParameter
                 Effect: Allow
@@ -1543,7 +1385,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'Global Accelerator ARN for '
+        - - 'Global Accelerator ARN for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1560,7 +1402,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'Global Accelerator DNS name for '
+        - - 'Global Accelerator DNS name for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1605,7 +1447,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'Global Accelerator Group Endpoint ARN for '
+        - - 'Global Accelerator Group Endpoint ARN for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1622,7 +1464,7 @@ Resources:
     Properties:
       Description: !Join
         - ''
-        - - 'Global Accelerator IP addresses for '
+        - - 'Global Accelerator IP addresses for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
@@ -1632,91 +1474,60 @@ Resources:
           - GlobalAcceleratorIPAddresses
       Tier: Standard
       Type: String
-      Value: !GetAtt 'GlobalAcceleratorInfoRetriever.IPAddresses'
+      Value: !GetAtt 'GlobalAcceleratorInfoRetrieverResource.IPAddresses'
     Type: AWS::SSM::Parameter
   GlobalAcceleratorInfoRetriever:
-    Condition: IsAcceptorStack
-    DependsOn:
-      - GlobalAccelerator
-      - GlobalAcceleratorInfoRetrieverLogGroup
-    Properties:
-      Properties:
-        AcceleratorArn: !Ref 'GlobalAccelerator'
-      ServiceToken: !GetAtt 'GlobalAcceleratorInfoRetrieverFunction.Arn'
-      Type: Custom::GetAcceleratorInfo
-      Version: '1.0'
-    Type: AWS::CloudFormation::CustomResource
-  GlobalAcceleratorInfoRetrieverFunction:
-    Condition: IsAcceptorStack
     DependsOn:
       - GlobalAcceleratorInfoRetrieverRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
+      Architectures:
+        - x86_64
       Code:
-        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
-          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
-          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - AcceleratorArn\
-          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
-          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
-          \ = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ event['RequestType'] in ['Create', 'Update']:\n\n        accelerator_client\
-          \ = boto3.client('globalaccelerator', region_name = 'us-west-2')\n\n   \
-          \     try:\n\n            response = accelerator_client.describe_accelerator(\n\
-          \                AcceleratorArn = properties['AcceleratorArn']\n       \
-          \     )\n\n            if 'Accelerator' not in response:\n\n           \
-          \     return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n\
-          \n            else:\n\n                responseData['IPAddresses'] = ','.join(response['Accelerator']['IpSets'][0]['IpAddresses'])\n\
-          \                return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData, properties['AcceleratorArn'])\n\n        except ClientError\
-          \ as e:\n            print(str(e))\n            return cfnresponse.send(event,\
-          \ context, cfnresponse.FAILED, responseData)\n            \n    elif event['RequestType']\
-          \ in ['Delete']:\n        \n        return cfnresponse.send(event, context,\
-          \ cfnresponse.SUCCESS, responseData)"
-      Description: !Join
-        - ''
-        - - 'GlobalAcceleratorInfoRetriever resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
+        ZipFile: "import json\nimport time\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\
+          logging.getLogger('boto3').setLevel(logging.INFO)\nlogging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - AcceleratorArn | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('-----\
+          \ REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n\
+          \    \n    if event['RequestType'] in ['Create', 'Update']:\n        \n        time.sleep(60)\n\n        accelerator_client = boto3.client('globalaccelerator', region_name = 'us-west-2')\n\n \
+          \       try:\n\n            response = accelerator_client.describe_accelerator(\n                AcceleratorArn = properties['AcceleratorArn']\n            )\n\n            if 'Accelerator' not\
+          \ in response:\n\n                return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n\n            else:\n\n                responseData['IPAddresses'] = ','.join(response['Accelerator']['IpSets'][0]['IpAddresses'])\n\
+          \                return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['AcceleratorArn'])\n\n        except ClientError as e:\n            print(str(e))\n     \
+          \       return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n            \n    elif event['RequestType'] in ['Delete']:\n        \n        return cfnresponse.send(event,\
+          \ context, cfnresponse.SUCCESS, responseData)"
+      Description: ''
       Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
+      Layers: []
+      MemorySize: 128
       Role: !GetAtt 'GlobalAcceleratorInfoRetrieverRole.Arn'
-      Runtime: python3.7
-      Timeout: 15
+      Runtime: python3.9
+      Timeout: 90
+      TracingConfig:
+        Mode: PassThrough
     Type: AWS::Lambda::Function
   GlobalAcceleratorInfoRetrieverLogGroup:
-    Condition: IsAcceptorStack
+    DeletionPolicy: Delete
     DependsOn:
-      - GlobalAcceleratorInfoRetrieverFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
+      - GlobalAcceleratorInfoRetriever
     Properties:
       LogGroupName: !Join
         - ''
         - - /aws/lambda/
-          - !Ref 'GlobalAcceleratorInfoRetrieverFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
+          - !Ref 'GlobalAcceleratorInfoRetriever'
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
-  GlobalAcceleratorInfoRetrieverRole:
+  GlobalAcceleratorInfoRetrieverResource:
     Condition: IsAcceptorStack
     DependsOn:
       - GlobalAccelerator
-    Metadata: {}
+      - GlobalAcceleratorInfoRetriever
+      - GlobalAcceleratorInfoRetrieverLogGroup
+    Properties:
+      Properties:
+        AcceleratorArn: !Ref 'GlobalAccelerator'
+      ServiceToken: !GetAtt 'GlobalAcceleratorInfoRetriever.Arn'
+      Type: Custom::GetAcceleratorInfo
+      Version: '1.0'
+    Type: AWS::CloudFormation::CustomResource
+  GlobalAcceleratorInfoRetrieverRole:
+    DependsOn: []
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -1728,16 +1539,25 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - globalaccelerator:DescribeAccelerator
-                Effect: Allow
-                Resource:
-                  - !GetAtt 'GlobalAccelerator.AcceleratorArn'
-          PolicyName: PrimaryPolicy
+      MaxSessionDuration: 3600
+      Policies: []
     Type: AWS::IAM::Role
+  GlobalAcceleratorInfoRetrieverRolemainpolicy:
+    Condition: IsAcceptorStack
+    DependsOn:
+      - GlobalAcceleratorInfoRetrieverRole
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - globalaccelerator:DescribeAccelerator
+            Effect: Allow
+            Resource:
+              - !GetAtt 'GlobalAccelerator.AcceleratorArn'
+      PolicyName: main-policy
+      Roles:
+        - !Ref 'GlobalAcceleratorInfoRetrieverRole'
+    Type: AWS::IAM::Policy
   GlobalAcceleratorListener:
     Condition: IsAcceptorStack
     DependsOn:
@@ -1750,696 +1570,128 @@ Resources:
           ToPort: !Ref 'FIXServerPort'
       Protocol: TCP
     Type: AWS::GlobalAccelerator::Listener
-  KafkaConnTLSParam:
+  MemoryDBHostParam:
     Condition: ''
     Properties:
       Description: !Join
         - ''
-        - - 'Kafka TLS connection setting for '
+        - - 'FIX engine MemoryDB host for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
         - /
         - - /fixengine
           - !Ref 'AWS::StackName'
-          - KafkaConnTLS
+          - MemoryDBHost
       Tier: Standard
       Type: String
-      Value: !Ref 'KafkaConnTLS'
+      Value: !GetAtt 'MemoryDbCluster.ClusterEndpoint.Address'
     Type: AWS::SSM::Parameter
-  KafkaConsumerGroupIDParam:
+  MemoryDBPortParam:
     Condition: ''
     Properties:
       Description: !Join
         - ''
-        - - 'Kafka Consumer Group ID for the '
+        - - 'FIX engine MemoryDB port for the '
           - !Ref 'AWS::StackName'
           - ' stack'
       Name: !Join
         - /
         - - /fixengine
           - !Ref 'AWS::StackName'
-          - KafkaConsumerGroupID
+          - MemoryDBPort
       Tier: Standard
       Type: String
-      Value: fixengine-consumer
+      Value: '6379'
     Type: AWS::SSM::Parameter
-  KafkaFromFixEngineTopicNameParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Kafka from FIX Engine topic name for the '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - KafkaFromFixEngineTopicName
-      Tier: Standard
-      Type: String
-      Value: FROM-FIX-ENGINE
-    Type: AWS::SSM::Parameter
-  KafkaPortParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Kafka connection port for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - KafkaPort
-      Tier: Standard
-      Type: String
-      Value: !If
-        - KafkaTLSEnabled
-        - '9094'
-        - '9092'
-    Type: AWS::SSM::Parameter
-  KafkaToFixEngineTopicNameParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Kafka to FIX Engine topic name for the '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - KafkaToFixEngineTopicName
-      Tier: Standard
-      Type: String
-      Value: TO-FIX-ENGINE
-    Type: AWS::SSM::Parameter
-  MSKCluster:
-    DependsOn:
-      - MSKClusterSecurityGroup
-    Properties:
-      BrokerNodeGroupInfo:
-        BrokerAZDistribution: DEFAULT
-        ClientSubnets:
-          - !Ref 'PrimaryPrivateSubnet'
-          - !Ref 'FailoverPrivateSubnet'
-        InstanceType: kafka.m5.large
-        SecurityGroups:
-          - !Ref 'MSKClusterSecurityGroup'
-        StorageInfo:
-          EBSStorageInfo:
-            VolumeSize: 100
-      ClusterName: !Ref 'AWS::StackName'
-      EncryptionInfo:
-        EncryptionAtRest:
-          DataVolumeKMSKeyId: !Ref 'KMSKeyARN'
-        EncryptionInTransit:
-          ClientBroker: TLS_PLAINTEXT
-          InCluster: true
-      KafkaVersion: 2.2.1
-      NumberOfBrokerNodes: 2
-    Type: AWS::MSK::Cluster
-  MSKClusterInfoRetriever:
-    DependsOn:
-      - MSKCluster
-      - MSKClusterInfoRetrieverLogGroup
-    Properties:
-      Properties:
-        ClusterARN: !Ref 'MSKCluster'
-      ServiceToken: !GetAtt 'MSKClusterInfoRetrieverFunction.Arn'
-      Type: Custom::GetMSKClusterInfo
-      Version: '1.0'
-    Type: AWS::CloudFormation::CustomResource
-  MSKClusterInfoRetrieverFunction:
-    Condition: ''
-    DependsOn:
-      - MSKClusterInfoRetrieverRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
-    Properties:
-      Code:
-        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
-          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
-          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - ClusterARN\
-          \ | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST\
-          \ RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData\
-          \ = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ operation == 'GetMSKClusterInfo':\n        \n        if event['RequestType']\
-          \ in ['Create', 'Update']:\n        \n            msk_client = boto3.client('kafka')\n\
-          \        \n            try:\n        \n                nodes = msk_client.list_nodes(\n\
-          \                    ClusterArn = properties['ClusterARN']\n           \
-          \     )\n        \n                if 'NodeInfoList' not in nodes or len(nodes['NodeInfoList'])\
-          \ == 0:\n        \n                    return cfnresponse.send(event, context,\
-          \ cfnresponse.FAILED, responseData)\n        \n                else:\n \
-          \       \n                    for node in nodes['NodeInfoList']:\n     \
-          \   \n                        if node['BrokerNodeInfo']['BrokerId'] == 1:\n\
-          \        \n                            responseData['PrimaryEndpoint'] =\
-          \ node['BrokerNodeInfo']['Endpoints'][0]\n        \n                   \
-          \     else:\n        \n                            responseData['FailoverEndpoint']\
-          \ = node['BrokerNodeInfo']['Endpoints'][0]\n        \n                 \
-          \   return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData,\
-          \ properties['ClusterARN'])\n        \n            except ClientError as\
-          \ e:\n                \n                print(str(e))\n                return\
-          \ cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n \
-          \       \n        elif event['RequestType'] in ['Delete']:\n        \n \
-          \           return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData)"
-      Description: !Join
-        - ''
-        - - 'MSKClusterInfoRetriever resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
-      Role: !GetAtt 'MSKClusterInfoRetrieverRole.Arn'
-      Runtime: python3.7
-      Timeout: 15
-    Type: AWS::Lambda::Function
-  MSKClusterInfoRetrieverLogGroup:
-    Condition: ''
-    DependsOn:
-      - MSKClusterInfoRetrieverFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
-    Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/lambda/
-          - !Ref 'MSKClusterInfoRetrieverFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
-    Type: AWS::Logs::LogGroup
-  MSKClusterInfoRetrieverRole:
-    Condition: ''
-    DependsOn:
-      - MSKCluster
-    Metadata: {}
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - kafka:ListNodes
-                Effect: Allow
-                Resource:
-                  - !Ref 'MSKCluster'
-          PolicyName: PrimaryPolicy
-    Type: AWS::IAM::Role
-  MSKClusterInitializationStarter:
-    DependsOn:
-      - MSKClusterPrepPolicy
-      - MSKInitializationDocument
-      - AutomationDocumentStarterLogGroup
-      - MSKClusterPrepSecurityGroupEgressToMSK
-    Properties:
-      Properties:
-        AutomationDocumentName: !Ref 'MSKInitializationDocument'
-        EligibleRequestTypes:
-          - Create
-        ExecutionRoleArn: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
-      ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
-      Type: Custom::StartSSMAutomationDocument
-      Version: '1.0'
-    Type: AWS::CloudFormation::CustomResource
-  MSKClusterInitializationWaiter:
-    CreationPolicy:
-      ResourceSignal:
-        Count: 1
-        Timeout: PT15M
-    DependsOn:
-      - MSKClusterPrepPolicy
-      - MSKInitializationDocument
-      - AutomationDocumentStarterLogGroup
-    Type: AWS::CloudFormation::WaitCondition
-  MSKClusterMemoryAlarm:
-    Condition: CreateAlarms
-    DependsOn:
-      - MSKCluster
-    Properties:
-      ActionsEnabled: true
-      AlarmActions:
-        - !Ref 'SNSTopicArn'
-      AlarmDescription: Alerts when MSK cluster's memory utilization exceeds 80%
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: Cluster Name
-          Value: !Ref 'MSKCluster'
-      EvaluationPeriods: 2
-      MetricName: MemoryUsed
-      Namespace: AWS/Kafka
-      OKActions:
-        - !Ref 'SNSTopicArn'
-      Period: 60
-      Statistic: Average
-      Threshold: '80'
-      TreatMissingData: notBreaching
-    Type: AWS::CloudWatch::Alarm
-  MSKClusterPrepExecutionRole:
-    DependsOn:
-      - MSKClusterPrepInstanceRole
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - ssm.amazonaws.com
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - ec2:RunInstances
-                Effect: Allow
-                Resource:
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ::image/*
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :subnet/*
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :security-group/
-                      - !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
-              - Action:
-                  - iam:PassRole
-                Effect: Allow
-                Resource:
-                  - !GetAtt 'MSKClusterPrepInstanceRole.Arn'
-              - Action:
-                  - cloudformation:SignalResource
-                Effect: Allow
-                Resource:
-                  - !Ref 'AWS::StackId'
-          PolicyName: primary-policy
-    Type: AWS::IAM::Role
-  MSKClusterPrepInstanceRole:
-    DependsOn:
-      - MSKCluster
-      - MSKClusterPrepLogGroup
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - kafka:DescribeCluster
-                Effect: Allow
-                Resource:
-                  - !Ref 'MSKCluster'
-              - Action:
-                  - logs:PutLogEvents
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                Effect: Allow
-                Resource:
-                  - !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - ':log-group:'
-                      - !Ref 'MSKClusterPrepLogGroup'
-                  - !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - ':log-group:'
-                      - !Ref 'MSKClusterPrepLogGroup'
-                      - :log-stream:*
-          PolicyName: primary-policy
-    Type: AWS::IAM::Role
-  MSKClusterPrepInstanceRoleProfile:
-    DependsOn:
-      - MSKClusterPrepInstanceRole
-    Properties:
-      Path: /
-      Roles:
-        - !Ref 'MSKClusterPrepInstanceRole'
-    Type: AWS::IAM::InstanceProfile
-  MSKClusterPrepLogGroup:
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
-    Properties:
-      LogGroupName: !Join
-        - /
-        - - /aws/ssm
-          - !Ref 'AWS::StackName'
-          - MSKPrepAutomation
-      RetentionInDays: !Ref 'LogRetentionInDays'
-    Type: AWS::Logs::LogGroup
-  MSKClusterPrepPolicy:
-    DependsOn:
-      - AutomationDocumentStarterRole
-      - MSKInitializationDocument
-      - MSKClusterPrepExecutionRole
-    Properties:
-      PolicyDocument:
-        Statement:
-          - Action:
-              - iam:PassRole
-            Effect: Allow
-            Resource:
-              - !GetAtt 'MSKClusterPrepExecutionRole.Arn'
-          - Action:
-              - ssm:StartAutomationExecution
-            Effect: Allow
-            Resource:
-              - !Join
-                - ''
-                - - 'arn:aws:ssm:'
-                  - !Ref 'AWS::Region'
-                  - ':'
-                  - !Ref 'AWS::AccountId'
-                  - :automation-definition/
-                  - !Ref 'MSKInitializationDocument'
-                  - :$DEFAULT
-      PolicyName: MSKClusterPrepPolicy
-      Roles:
-        - !Ref 'AutomationDocumentStarterRole'
-    Type: AWS::IAM::Policy
-  MSKClusterPrepSecurityGroup:
-    DependsOn: []
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W5
-            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
-    Properties:
-      GroupDescription: Security Group for MSK Cluster Prep
-      SecurityGroupEgress:
-        - CidrIp: '0.0.0.0/0'
-          Description: Allow All HTTPS Traffic
-          FromPort: 443
-          IpProtocol: tcp
-          ToPort: 443
-      VpcId: !Ref 'VPC'
-    Type: AWS::EC2::SecurityGroup
-  MSKClusterPrepSecurityGroupEgressToMSK:
-    DependsOn:
-      - MSKClusterPrepSecurityGroup
-    Properties:
-      Description: Allow All TCP Traffic to MSK Cluster
-      DestinationSecurityGroupId: !GetAtt 'MSKClusterSecurityGroup.GroupId'
-      FromPort: 2181
-      GroupId: !GetAtt 'MSKClusterPrepSecurityGroup.GroupId'
-      IpProtocol: tcp
-      ToPort: 2181
-    Type: AWS::EC2::SecurityGroupEgress
-  MSKClusterSecurityGroup:
+  MemoryDBSecurityGroup:
     DependsOn:
       - FargateSecurityGroup
-      - MSKClusterPrepSecurityGroup
     Properties:
-      GroupDescription: Security Group for MSK Cluster
+      GroupDescription: Security Group for Memory DB Cluster
       SecurityGroupEgress:
         - CidrIp: '0.0.0.0/32'
-          Description: Deny All Traffic
+          Description: Deny All Outgoing Traffic
           FromPort: 1
           IpProtocol: tcp
           ToPort: 1
       SecurityGroupIngress:
-        - Description: MSK Access for Private User App Ranges
-          FromPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
+        - Description: Access from Private User App Ranges
+          FromPort: 6379
           IpProtocol: tcp
           SourcePrefixListId: !Ref 'UserApplicationVPCPrefixList'
-          ToPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
-        - Description: Non TLS Communication
-          FromPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
+          ToPort: 6379
+        - Description: Access from Farget Cluster
+          FromPort: 6379
           IpProtocol: tcp
           SourceSecurityGroupId: !Ref 'FargateSecurityGroup'
-          ToPort: !If
-            - KafkaTLSEnabled
-            - 9094
-            - 9092
-        - Description: Zookeeper Administration
-          FromPort: 2181
-          IpProtocol: tcp
-          SourceSecurityGroupId: !Ref 'MSKClusterPrepSecurityGroup'
-          ToPort: 2181
+          ToPort: 6379
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
-  MSKInitializationDocument:
-    DependsOn:
-      - MSKCluster
-      - MSKClusterPrepExecutionRole
-      - MSKClusterPrepSecurityGroup
-      - MSKClusterPrepInstanceRoleProfile
+  MemoryDbAcl:
     Properties:
-      Content:
-        assumeRole: '{{ExecutionRoleArn}}'
-        description: !Join
-          - ''
-          - - 'Configures the MSK cluster by CloudFormation stack '
-            - !Ref 'AWS::StackName'
-        mainSteps:
-          - action: aws:runInstances
-            inputs:
-              BlockDeviceMappings:
-                - DeviceName: /dev/sda1
-                  Ebs:
-                    Encrypted: true
-                    VolumeSize: 8
-                    VolumeType: gp2
-              IamInstanceProfileName: !Ref 'MSKClusterPrepInstanceRoleProfile'
-              ImageId: '{{LatestAmazonLinux2AMIId}}'
-              InstanceType: t3a.small
-              MaxInstanceCount: 1
-              MinInstanceCount: 1
-              SecurityGroupIds:
-                - !Ref 'MSKClusterPrepSecurityGroup'
-              SubnetId: !Ref 'PrimaryPrivateSubnet'
-              TagSpecifications:
-                - ResourceType: instance
-                  Tags:
-                    - Key: Name
-                      Value: !Join
-                        - '-'
-                        - - !Ref 'AWS::StackName'
-                          - MSKInitializer
-                    - Key: LaunchedBy
-                      Value: SSMAutomation
-                    - Key: StackName
-                      Value: !Ref 'AWS::StackName'
-            maxAttempts: 3
-            name: LaunchInstance
-            onFailure: step:SignalFailure
-            timeoutSeconds: 300
-          - action: aws:runCommand
-            inputs:
-              CloudWatchOutputConfig:
-                CloudWatchLogGroupName: !Ref 'MSKClusterPrepLogGroup'
-                CloudWatchOutputEnabled: true
-              DocumentName: AWS-RunShellScript
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Parameters:
-                commands:
-                  - sudo yum -y update
-                  - sudo yum -y install java-1.8.0-openjdk-devel
-                  - sudo wget https://archive.apache.org/dist/kafka/2.2.1/kafka_2.12-2.2.1.tgz
-                  - sudo tar -xzf kafka_2.12-2.2.1.tgz
-                  - cd kafka_2.12-2.2.1
-                  - !Join
-                    - ''
-                    - - 'ZOOKEEPER_CONN_STRING=$(aws kafka describe-cluster --region '
-                      - !Ref 'AWS::Region'
-                      - ' --cluster-arn "'
-                      - !Ref 'MSKCluster'
-                      - '" --query ''ClusterInfo.ZookeeperConnectString'' --output
-                        text)'
-                  - !Join
-                    - ''
-                    - - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
-                        --replication-factor 2 --partitions 1 --topic "TO-FIX-ENGINE"
-                  - !Join
-                    - ''
-                    - - bin/kafka-topics.sh --create --zookeeper $ZOOKEEPER_CONN_STRING
-                        --replication-factor 2 --partitions 1 --topic "FROM-FIX-ENGINE"
-            name: CreateMSKTopics
-            onFailure: step:TerminateInstanceOnFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: TerminateInstances
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Service: ec2
-            name: TerminateInstanceOnSuccess
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: SignalResource
-              LogicalResourceId: MSKClusterInitializationWaiter
-              Service: cloudformation
-              StackName: !Ref 'AWS::StackName'
-              Status: SUCCESS
-              UniqueId: !Ref 'AWS::StackName'
-            isEnd: true
-            name: SignalSuccess
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: TerminateInstances
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Service: ec2
-            name: TerminateInstanceOnFailure
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: SignalResource
-              LogicalResourceId: MSKClusterInitializationWaiter
-              Service: cloudformation
-              StackName: !Ref 'AWS::StackName'
-              Status: FAILURE
-              UniqueId: !Ref 'AWS::StackName'
-            isEnd: true
-            name: SignalFailure
-        parameters:
-          ExecutionRoleArn:
-            default: !GetAtt 'MSKClusterPrepExecutionRole.Arn'
-            description: The service role to use for this automation.
-            type: String
-          LatestAmazonLinux2AMIId:
-            default: '{{ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-ebs}}'
-            description: The latest Amazon Linux 2 AMI queried from the public parameter.
-            type: String
-        schemaVersion: '0.3'
-      DocumentType: Automation
-    Type: AWS::SSM::Document
-  MiscMethodsHandlerFunction:
-    Condition: ''
+      ACLName: !Ref 'AWS::StackName'
+    Type: AWS::MemoryDB::ACL
+  MemoryDbCluster:
+    DependsOn:
+      - MemoryDbAcl
+      - MemoryDbSubnetGroup
+    Properties:
+      ACLName: !Ref 'AWS::StackName'
+      AutoMinorVersionUpgrade: false
+      ClusterName: !Ref 'AWS::StackName'
+      NodeType: db.r6g.large
+      NumReplicasPerShard: 1
+      NumShards: 1
+      SecurityGroupIds:
+        - !Ref 'MemoryDBSecurityGroup'
+      SubnetGroupName: !Ref 'AWS::StackName'
+      TLSEnabled: true
+    Type: AWS::MemoryDB::Cluster
+  MemoryDbSubnetGroup:
+    Properties:
+      SubnetGroupName: !Ref 'AWS::StackName'
+      SubnetIds:
+        - !Ref 'PrimaryPrivateSubnet'
+        - !Ref 'FailoverPrivateSubnet'
+    Type: AWS::MemoryDB::SubnetGroup
+  MiscMethodsHandler:
     DependsOn:
       - MiscMethodsHandlerRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
+      Architectures:
+        - x86_64
       Code:
-        ZipFile: "import json\nimport logging\nimport cfnresponse\nfrom botocore.exceptions\
-          \ import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\
-          \ndef handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED\
-          \ -----')\n    LOGGER.info(json.dumps(event))\n\n    response_data = {}\n\
-          \    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    if\
-          \ event['RequestType'] in ['Create', 'Update']:\n        \n        if operation\
-          \ == 'ManipulateString':\n            \n            action = properties['Action']\n\
-          \            input_str = properties['InputString']\n            \n     \
-          \       if action == 'lower':\n                sanitized_str = input_str.lower()\n\
-          \                \n            elif action == 'upper':\n               \
-          \ sanitized_str = input_str.upper()\n                \n            response_data['OutputString']\
-          \ = sanitized_str\n            return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ response_data, sanitized_str)\n                \n    elif event['RequestType']\
-          \ in ['Delete']:\n        \n        return cfnresponse.send(event, context,\
-          \ cfnresponse.SUCCESS, response_data)"
-      Description: !Join
-        - ''
-        - - 'MiscMethodsHandler resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
+        ZipFile: "import json\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\n\ndef handler(event, context):\n\
+          \n    LOGGER.info('----- REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    response_data = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
+          \    properties = event['ResourceProperties']['Properties']\n    \n    if event['RequestType'] in ['Create', 'Update']:\n        \n        if operation == 'ManipulateString':\n            \n \
+          \           action = properties['Action']\n            input_str = properties['InputString']\n            \n            if action == 'lower':\n                sanitized_str = input_str.lower()\n\
+          \                \n            elif action == 'upper':\n                sanitized_str = input_str.upper()\n                \n            response_data['OutputString'] = sanitized_str\n       \
+          \     return cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, sanitized_str)\n                \n    elif event['RequestType'] in ['Delete']:\n        \n        return cfnresponse.send(event,\
+          \ context, cfnresponse.SUCCESS, response_data)"
+      Description: ''
       Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
+      Layers: []
+      MemorySize: 128
       Role: !GetAtt 'MiscMethodsHandlerRole.Arn'
-      Runtime: python3.7
-      Timeout: 15
+      Runtime: python3.9
+      Timeout: 60
+      TracingConfig:
+        Mode: PassThrough
     Type: AWS::Lambda::Function
   MiscMethodsHandlerLogGroup:
-    Condition: ''
+    DeletionPolicy: Delete
     DependsOn:
-      - MiscMethodsHandlerFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
+      - MiscMethodsHandler
     Properties:
       LogGroupName: !Join
         - ''
         - - /aws/lambda/
-          - !Ref 'MiscMethodsHandlerFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
+          - !Ref 'MiscMethodsHandler'
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   MiscMethodsHandlerRole:
-    Condition: ''
     DependsOn: []
-    Metadata: {}
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -2451,6 +1703,7 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
       Policies: []
     Type: AWS::IAM::Role
   PrimaryAcceptorECSService:
@@ -2483,18 +1736,12 @@ Resources:
       - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
-      - FargateExecutionRole
-      - MSKClusterInfoRetriever
-      - RDSClusterNonAdminSecret
       - ECSImageBuildWaiter
+      - FargateExecutionRole
       - GlobalAccelerator
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: PRIMARY_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-            - Name: FAILOVER_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
             - Name: GLOBAL_ACCELERATOR_ARN
@@ -2565,17 +1812,11 @@ Resources:
       - ECRRepository
       - FargateLogGroup
       - FargateTaskRole
-      - FargateExecutionRole
-      - MSKClusterInfoRetriever
-      - RDSClusterNonAdminSecret
       - ECSImageBuildWaiter
+      - FargateExecutionRole
     Properties:
       ContainerDefinitions:
         - Environment:
-            - Name: PRIMARY_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-            - Name: FAILOVER_MSK_ENDPOINT
-              Value: !GetAtt 'MSKClusterInfoRetriever.FailoverEndpoint'
             - Name: APPLICATION_STACK_NAME
               Value: !Ref 'AWS::StackName'
           Essential: true
@@ -2610,23 +1851,6 @@ Resources:
         - FARGATE
       TaskRoleArn: !GetAtt 'FargateTaskRole.Arn'
     Type: AWS::ECS::TaskDefinition
-  PrimaryMSKEndpointParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Primary MSK endpoint FQDN for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - PrimaryMSKEndpoint
-      Tier: Standard
-      Type: String
-      Value: !GetAtt 'MSKClusterInfoRetriever.PrimaryEndpoint'
-    Type: AWS::SSM::Parameter
   PrimaryNLB:
     Condition: IsAcceptorStack
     DependsOn: []
@@ -2660,23 +1884,6 @@ Resources:
       Port: !Ref 'FIXServerPort'
       Protocol: TCP
     Type: AWS::ElasticLoadBalancingV2::Listener
-  PrimaryRDSInstance:
-    DependsOn:
-      - RDSCluster
-      - RDSParameterGroup
-      - RDSClusterErrorLogGroup
-    Properties:
-      AllowMajorVersionUpgrade: false
-      AutoMinorVersionUpgrade: true
-      CopyTagsToSnapshot: true
-      DBClusterIdentifier: !Ref 'RDSCluster'
-      DBInstanceClass: db.r4.2xlarge
-      DBParameterGroupName: !Ref 'RDSParameterGroup'
-      EnablePerformanceInsights: false
-      Engine: aurora
-      MultiAZ: false
-      PubliclyAccessible: false
-    Type: AWS::RDS::DBInstance
   PrimaryTargetGroup:
     Condition: IsAcceptorStack
     DependsOn: []
@@ -2692,699 +1899,6 @@ Resources:
       TargetType: ip
       VpcId: !Ref 'VPC'
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
-  RDSCluster:
-    DeletionPolicy: Snapshot
-    DependsOn:
-      - RDSClusterSubnetGroup
-      - RDSClusterAdminSecret
-      - RDSClusterSecurityGroup
-      - RDSClusterParameterGroup
-    Properties:
-      DBClusterParameterGroupName: !Ref 'RDSClusterParameterGroup'
-      DBSubnetGroupName: !Ref 'RDSClusterSubnetGroup'
-      EnableCloudwatchLogsExports:
-        - error
-        - general
-        - slowquery
-        - audit
-      EnableIAMDatabaseAuthentication: false
-      Engine: aurora
-      EngineMode: multimaster
-      EngineVersion: 5.6.10a
-      KmsKeyId: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
-      MasterUserPassword: !Join
-        - ''
-        - - '{{resolve:secretsmanager:'
-          - !Ref 'RDSClusterAdminSecret'
-          - :SecretString:password}}
-      MasterUsername: !Join
-        - ''
-        - - '{{resolve:secretsmanager:'
-          - !Ref 'RDSClusterAdminSecret'
-          - :SecretString:username}}
-      StorageEncrypted: true
-      Tags: []
-      VpcSecurityGroupIds:
-        - !Ref 'RDSClusterSecurityGroup'
-    Type: AWS::RDS::DBCluster
-  RDSClusterAdminSecret:
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W77
-            reason: No cross-account access to this secret is required.
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Admin credentials for '
-          - !Ref 'AWS::StackName'
-          - ' RDS cluster'
-      GenerateSecretString:
-        ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
-        ExcludeLowercase: false
-        ExcludeNumbers: false
-        ExcludePunctuation: true
-        ExcludeUppercase: false
-        GenerateStringKey: password
-        IncludeSpace: false
-        PasswordLength: 16
-        RequireEachIncludedType: true
-        SecretStringTemplate: '{"username": "FEAdmin"}'
-    Type: AWS::SecretsManager::Secret
-  RDSClusterAdminSecretAttachment:
-    DependsOn:
-      - RDSCluster
-      - RDSClusterAdminSecret
-    Properties:
-      SecretId: !Ref 'RDSClusterAdminSecret'
-      TargetId: !Ref 'RDSCluster'
-      TargetType: AWS::RDS::DBCluster
-    Type: AWS::SecretsManager::SecretTargetAttachment
-  RDSClusterErrorLogGroup:
-    DependsOn:
-      - RDSCluster
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
-    Properties:
-      LogGroupName: !Join
-        - /
-        - - /aws/rds/cluster
-          - !Ref 'RDSCluster'
-          - error
-      RetentionInDays: !Ref 'LogRetentionInDays'
-    Type: AWS::Logs::LogGroup
-  RDSClusterInitializationStarter:
-    DependsOn:
-      - RDSClusterPrepPolicy
-      - RDSInitializationDocument
-      - FargateSecurityGroupEgressToRDS
-      - AutomationDocumentStarterLogGroup
-    Properties:
-      Properties:
-        AutomationDocumentName: !Ref 'RDSInitializationDocument'
-        EligibleRequestTypes:
-          - Create
-        ExecutionRoleArn: !GetAtt 'RDSClusterPrepExecutionRole.Arn'
-      ServiceToken: !GetAtt 'AutomationDocumentStarterFunction.Arn'
-      Type: Custom::StartSSMAutomationDocument
-      Version: '1.0'
-    Type: AWS::CloudFormation::CustomResource
-  RDSClusterInitializationWaiter:
-    CreationPolicy:
-      ResourceSignal:
-        Count: 1
-        Timeout: PT15M
-    DependsOn:
-      - RDSClusterPrepPolicy
-      - RDSInitializationDocument
-      - AutomationDocumentStarterLogGroup
-    Type: AWS::CloudFormation::WaitCondition
-  RDSClusterNonAdminSecret:
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W77
-            reason: No cross-account access to this secret is required.
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Non-Admin credentials for '
-          - !Ref 'AWS::StackName'
-          - ' RDS cluster'
-      GenerateSecretString:
-        ExcludeCharacters: '"@/\,*!#$%-[]()_:^&`<>;+='''
-        ExcludeLowercase: false
-        ExcludeNumbers: false
-        ExcludePunctuation: true
-        ExcludeUppercase: false
-        GenerateStringKey: password
-        IncludeSpace: false
-        PasswordLength: 16
-        RequireEachIncludedType: true
-        SecretStringTemplate: '{"username": "fixengine"}'
-    Type: AWS::SecretsManager::Secret
-  RDSClusterNonAdminSecretArnParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'ARN of RDS cluster non-admin secret for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - RDSClusterNonAdminSecretArn
-      Tier: Standard
-      Type: String
-      Value: !Ref 'RDSClusterNonAdminSecret'
-    Type: AWS::SSM::Parameter
-  RDSClusterNonAdminSecretAttachment:
-    DependsOn:
-      - RDSCluster
-      - RDSClusterNonAdminSecret
-    Properties:
-      SecretId: !Ref 'RDSClusterNonAdminSecret'
-      TargetId: !Ref 'RDSCluster'
-      TargetType: AWS::RDS::DBCluster
-    Type: AWS::SecretsManager::SecretTargetAttachment
-  RDSClusterParameterGroup:
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Cluster parameter group for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Family: aurora5.6
-      Parameters:
-        server_audit_logging: 0
-        server_audit_logs_upload: 0
-    Type: AWS::RDS::DBClusterParameterGroup
-  RDSClusterPrepExecutionRole:
-    DependsOn: []
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - ssm.amazonaws.com
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - ec2:RunInstances
-                Effect: Allow
-                Resource:
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ::image/*
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :subnet/*
-                  - !Join
-                    - ''
-                    - - 'arn:aws:ec2:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - :security-group/
-                      - !GetAtt 'RDSClusterSecurityGroup.GroupId'
-              - Action:
-                  - iam:PassRole
-                Effect: Allow
-                Resource:
-                  - !GetAtt 'RDSClusterPrepInstanceRole.Arn'
-              - Action:
-                  - cloudformation:SignalResource
-                Effect: Allow
-                Resource:
-                  - !Ref 'AWS::StackId'
-          PolicyName: primary-policy
-    Type: AWS::IAM::Role
-  RDSClusterPrepInstanceRole:
-    DependsOn:
-      - RDSClusterPrepLogGroup
-      - RDSClusterAdminSecret
-      - RDSClusterNonAdminSecret
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Action:
-              - sts:AssumeRole
-            Effect: Allow
-            Principal:
-              Service:
-                - ec2.amazonaws.com
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      Policies:
-        - PolicyDocument:
-            Statement:
-              - Action:
-                  - secretsmanager:GetSecretValue
-                Effect: Allow
-                Resource:
-                  - !Ref 'RDSClusterAdminSecret'
-                  - !Ref 'RDSClusterNonAdminSecret'
-              - Action:
-                  - logs:PutLogEvents
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:DescribeLogGroups
-                  - logs:DescribeLogStreams
-                Effect: Allow
-                Resource:
-                  - !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - ':log-group:'
-                      - !Ref 'RDSClusterPrepLogGroup'
-                  - !Join
-                    - ''
-                    - - 'arn:aws:logs:'
-                      - !Ref 'AWS::Region'
-                      - ':'
-                      - !Ref 'AWS::AccountId'
-                      - ':log-group:'
-                      - !Ref 'RDSClusterPrepLogGroup'
-                      - :log-stream:*
-          PolicyName: primary-policy
-    Type: AWS::IAM::Role
-  RDSClusterPrepInstanceRoleProfile:
-    DependsOn:
-      - RDSClusterPrepInstanceRole
-    Properties:
-      Path: /
-      Roles:
-        - !Ref 'RDSClusterPrepInstanceRole'
-    Type: AWS::IAM::InstanceProfile
-  RDSClusterPrepLogGroup:
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
-    Properties:
-      LogGroupName: !Join
-        - /
-        - - /aws/ssm
-          - !Ref 'AWS::StackName'
-          - RDSPrepAutomation
-      RetentionInDays: !Ref 'LogRetentionInDays'
-    Type: AWS::Logs::LogGroup
-  RDSClusterPrepPolicy:
-    DependsOn:
-      - AutomationDocumentStarterRole
-      - RDSInitializationDocument
-      - RDSClusterPrepExecutionRole
-    Properties:
-      PolicyDocument:
-        Statement:
-          - Action:
-              - iam:PassRole
-            Effect: Allow
-            Resource:
-              - !GetAtt 'RDSClusterPrepExecutionRole.Arn'
-          - Action:
-              - ssm:StartAutomationExecution
-            Effect: Allow
-            Resource:
-              - !Join
-                - ''
-                - - 'arn:aws:ssm:'
-                  - !Ref 'AWS::Region'
-                  - ':'
-                  - !Ref 'AWS::AccountId'
-                  - :automation-definition/
-                  - !Ref 'RDSInitializationDocument'
-                  - :$DEFAULT
-      PolicyName: RDSClusterPrepPolicy
-      Roles:
-        - !Ref 'AutomationDocumentStarterRole'
-    Type: AWS::IAM::Policy
-  RDSClusterPrepSecurityGroup:
-    DependsOn: []
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W5
-            reason: Outbound HTTP(S) traffic is required to download third-party dependencies.
-    Properties:
-      GroupDescription: Security Group for RDS Cluster Prep
-      SecurityGroupEgress:
-        - CidrIp: '0.0.0.0/0'
-          Description: Allow All HTTPS Traffic
-          FromPort: 80
-          IpProtocol: tcp
-          ToPort: 80
-        - CidrIp: '0.0.0.0/0'
-          Description: Allow All HTTPS Traffic
-          FromPort: 443
-          IpProtocol: tcp
-          ToPort: 443
-      VpcId: !Ref 'VPC'
-    Type: AWS::EC2::SecurityGroup
-  RDSClusterPrepSecurityGroupEgressToRDS:
-    DependsOn:
-      - RDSClusterSecurityGroup
-      - RDSClusterPrepSecurityGroup
-    Properties:
-      Description: Allow TCP Traffic to RDS MySQL
-      DestinationSecurityGroupId: !GetAtt 'RDSClusterSecurityGroup.GroupId'
-      FromPort: 3306
-      GroupId: !GetAtt 'RDSClusterPrepSecurityGroup.GroupId'
-      IpProtocol: tcp
-      ToPort: 3306
-    Type: AWS::EC2::SecurityGroupEgress
-  RDSClusterSecretArnParam:
-    Condition: ''
-    Properties:
-      Description: !Join
-        - ''
-        - - 'ARN of RDS cluster secret for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Name: !Join
-        - /
-        - - /fixengine
-          - !Ref 'AWS::StackName'
-          - RDSClusterSecretArn
-      Tier: Standard
-      Type: String
-      Value: !Ref 'RDSClusterAdminSecret'
-    Type: AWS::SSM::Parameter
-  RDSClusterSecurityGroup:
-    DependsOn:
-      - FargateSecurityGroup
-    Properties:
-      GroupDescription: !Join
-        - ''
-        - - 'Security Group for '
-          - !Ref 'AWS::StackName'
-          - ' RDS Cluster'
-      SecurityGroupEgress:
-        - CidrIp: '0.0.0.0/32'
-          Description: Deny All Traffic
-          FromPort: 1
-          IpProtocol: tcp
-          ToPort: 1
-      SecurityGroupIngress:
-        - Description: Fargate Task
-          FromPort: 3306
-          IpProtocol: tcp
-          SourceSecurityGroupId: !Ref 'FargateSecurityGroup'
-          ToPort: 3306
-        - Description: DB Access for Private User App Ranges
-          FromPort: 3306
-          IpProtocol: tcp
-          SourcePrefixListId: !Ref 'UserApplicationVPCPrefixList'
-          ToPort: 3306
-      VpcId: !Ref 'VPC'
-    Type: AWS::EC2::SecurityGroup
-  RDSClusterSubnetGroup:
-    DependsOn: []
-    Properties:
-      DBSubnetGroupDescription: !Join
-        - ''
-        - - 'Private subnets defined in '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      SubnetIds:
-        - !Ref 'PrimaryPrivateSubnet'
-        - !Ref 'FailoverPrivateSubnet'
-    Type: AWS::RDS::DBSubnetGroup
-  RDSInitializationDocument:
-    DependsOn:
-      - RDSCluster
-      - PrimaryRDSInstance
-      - FailoverRDSInstance
-      - FargateSecurityGroup
-      - RDSClusterPrepLogGroup
-      - RDSClusterAdminSecret
-      - RDSClusterNonAdminSecret
-      - RDSClusterPrepExecutionRole
-      - RDSClusterPrepInstanceRoleProfile
-      - RDSClusterPrepSecurityGroupEgressToRDS
-    Properties:
-      Content:
-        assumeRole: '{{ExecutionRoleArn}}'
-        description: !Join
-          - ''
-          - - 'Configure a FIX Engine DB cluster created by CloudFormation stack '
-            - !Ref 'AWS::StackName'
-        mainSteps:
-          - action: aws:runInstances
-            inputs:
-              IamInstanceProfileName: !Ref 'RDSClusterPrepInstanceRoleProfile'
-              ImageId: '{{LatestUbuntu2004AMIId}}'
-              InstanceType: t3a.small
-              MaxInstanceCount: 1
-              MinInstanceCount: 1
-              SecurityGroupIds:
-                - !Ref 'RDSClusterPrepSecurityGroup'
-              SubnetId: !Ref 'PrimaryPrivateSubnet'
-              TagSpecifications:
-                - ResourceType: instance
-                  Tags:
-                    - Key: Name
-                      Value: !Join
-                        - '-'
-                        - - !Ref 'AWS::StackName'
-                          - RDSInitializer
-                    - Key: LaunchedBy
-                      Value: SSMAutomation
-                    - Key: StackName
-                      Value: !Ref 'AWS::StackName'
-            maxAttempts: 3
-            name: LaunchInstance
-            onFailure: step:SignalFailure
-            timeoutSeconds: 300
-          - action: aws:runCommand
-            inputs:
-              CloudWatchOutputConfig:
-                CloudWatchLogGroupName: !Ref 'RDSClusterPrepLogGroup'
-                CloudWatchOutputEnabled: true
-              DocumentName: AWS-RunShellScript
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Parameters:
-                commands:
-                  - sudo apt-get update 2>/dev/null
-                  - sudo apt-get install awscli mysql-client jq -y 2>/dev/null
-                  - '#sudo yum install jq mysql -y'
-                  - !Join
-                    - ''
-                    - - DB_HOST=
-                      - !GetAtt 'RDSCluster.Endpoint.Address'
-                  - '# Retrieves & Assigns to Variables Admin DB Credentials'
-                  - !Join
-                    - ''
-                    - - 'ADMIN_DB_SECRET=$(aws secretsmanager get-secret-value --secret-id '
-                      - !Join
-                        - '-'
-                        - - !Select
-                            - 0
-                            - !Split
-                              - '-'
-                              - !Select
-                                - 6
-                                - !Split
-                                  - ':'
-                                  - !Ref 'RDSClusterAdminSecret'
-                          - !Select
-                            - 1
-                            - !Split
-                              - '-'
-                              - !Select
-                                - 6
-                                - !Split
-                                  - ':'
-                                  - !Ref 'RDSClusterAdminSecret'
-                      - ' --region '
-                      - !Ref 'AWS::Region'
-                      - ' | jq --raw-output .SecretString)'
-                  - ADMIN_DB_USERNAME=$(jq -n -r --argjson data "$ADMIN_DB_SECRET"
-                    '$data.username')
-                  - export MYSQL_PWD=$(jq -n -r --argjson data "$ADMIN_DB_SECRET"
-                    '$data.password')
-                  - '# Retrieves & Assigns to Variables Non-Admin DB Credentials'
-                  - !Join
-                    - ''
-                    - - 'NON_ADMIN_DB_SECRET=$(aws secretsmanager get-secret-value
-                        --secret-id '
-                      - !Join
-                        - '-'
-                        - - !Select
-                            - 0
-                            - !Split
-                              - '-'
-                              - !Select
-                                - 6
-                                - !Split
-                                  - ':'
-                                  - !Ref 'RDSClusterNonAdminSecret'
-                          - !Select
-                            - 1
-                            - !Split
-                              - '-'
-                              - !Select
-                                - 6
-                                - !Split
-                                  - ':'
-                                  - !Ref 'RDSClusterNonAdminSecret'
-                      - ' --region '
-                      - !Ref 'AWS::Region'
-                      - ' | jq --raw-output .SecretString)'
-                  - NON_ADMIN_DB_USERNAME=$(jq -n -r --argjson data "$NON_ADMIN_DB_SECRET"
-                    '$data.username')
-                  - NON_ADMIN_DB_PASSWORD=$(jq -n -r --argjson data "$NON_ADMIN_DB_SECRET"
-                    '$data.password')
-                  - "echo \"\nDROP DATABASE IF EXISTS <database-name>;\n\nCREATE DATABASE\
-                    \ <database-name>;\n\nUSE <database-name>;\n\n/* Deletes (if necessary)\
-                    \ and Creates Non-Admin User */\nCREATE USER '$NON_ADMIN_DB_USERNAME'\
-                    \ IDENTIFIED BY '$NON_ADMIN_DB_PASSWORD';\n\nCREATE TABLE sessions\
-                    \ (\n  beginstring CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64)\
-                    \ NOT NULL,\n  targetcompid VARCHAR(64) NOT NULL,\n  session_qualifier\
-                    \ VARCHAR(64) NOT NULL,\n  creation_time DATETIME NOT NULL,\n\
-                    \  incoming_seqnum INT NOT NULL, \n  outgoing_seqnum INT NOT NULL,\n\
-                    \  PRIMARY KEY (beginstring, sendercompid, targetcompid, session_qualifier)\n\
-                    );\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.sessions\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages (\n  beginstring\
-                    \ CHAR(8) NOT NULL,\n  sendercompid VARCHAR(64) NOT NULL,\n  targetcompid\
-                    \ VARCHAR(64) NOT NULL,\n  session_qualifier VARCHAR(64) NOT NULL,\n\
-                    \  msgseqnum INT NOT NULL, \n  message BLOB NOT NULL,\n  PRIMARY\
-                    \ KEY (beginstring, sendercompid, targetcompid, session_qualifier,\
-                    \ msgseqnum)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_log (\n\
-                    \  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT\
-                    \ NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n\
-                    \  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier\
-                    \ VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\n\
-                    GRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_log\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE messages_backup_log\
-                    \ (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME\
-                    \ NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring\
-                    \ CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n\
-                    \  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY\
-                    \ KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.messages_backup_log\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_log (\n \
-                    \ id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME NOT\
-                    \ NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring CHAR(8),\n\
-                    \  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n  session_qualifier\
-                    \ VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY KEY (id)\n);\n\
-                    GRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_log\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE event_backup_log\
-                    \ (\n  id INT UNSIGNED NOT NULL AUTO_INCREMENT,\n  time DATETIME\
-                    \ NOT NULL,\n  time_milliseconds INT NOT NULL,\n  beginstring\
-                    \ CHAR(8),\n  sendercompid VARCHAR(64),\n  targetcompid VARCHAR(64),\n\
-                    \  session_qualifier VARCHAR(64),\n  text BLOB NOT NULL,\n  PRIMARY\
-                    \ KEY (id)\n);\nGRANT SELECT, INSERT, UPDATE, DELETE ON <database-name>.event_backup_log\
-                    \ TO '$NON_ADMIN_DB_USERNAME';\n\nCREATE TABLE ActiveEngine  (\n\
-                    \  TS TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  ipAddress VARCHAR(16)\
-                    \ NOT NULL,\n  PRIMARY KEY (TS, ipAddress)\n);\nGRANT SELECT,\
-                    \ UPDATE ON <database-name>.ActiveEngine TO '$NON_ADMIN_DB_USERNAME';\n\
-                    \nINSERT INTO ActiveEngine VALUES (NOW(), 'none');\n\nDELIMITER\
-                    \ //\n\ncreate procedure EngineStatus(IN ipAdd varchar(16), OUT\
-                    \ value int, OUT lastIpAdd varchar(16), OUT lastTimestamp DATETIME,\
-                    \ OUT timeNow DATETIME, OUT timeDiffSec int)\nBEGIN\n\tSTART TRANSACTION;\n\
-                    \    SET timeNow = NOW();\n    SELECT TS, timestampdiff (second,\
-                    \ TS, timeNow), ipAddress INTO lastTimestamp, timeDiffSec, lastIpAdd\
-                    \ FROM ActiveEngine;\n    IF timeDiffSec <= 3 AND ipAdd != lastIpAdd\
-                    \ THEN            # If another IP is the leader and not stale\
-                    \ \n      SET value = 0;                                     \
-                    \      # Then I do nothing and keep waiting\n    ELSE \n     \
-                    \ UPDATE ActiveEngine SET TS = timeNow, ipAddress = ipAdd; # Else\
-                    \ I am going to be the leader (update DB to say this) \n     \
-                    \ IF (timeDiffSec > 3) THEN                                # \
-                    \  If the last leader is stale (no matter if it was me or another\
-                    \ IP)\n        SET value = -1;                               \
-                    \         #   Then I need to become the new leader\n      ELSE\n\
-                    \        SET value = 1;                                      \
-                    \   #   Else I am still the active leader\n      END IF;\n   \
-                    \ END IF;\n    COMMIT;\nEND //\n\nDELIMITER ;\n\nGRANT SELECT\
-                    \ ON mysql.proc TO '$NON_ADMIN_DB_USERNAME';\nGRANT EXECUTE ON\
-                    \ PROCEDURE <database-name>.EngineStatus TO '$NON_ADMIN_DB_USERNAME';\n\
-                    \n\" >> /tmp/rds-cluster-prep.sql"
-                  - !Join
-                    - ''
-                    - - '#sudo sed -i ''s/<database-name>/`quickfix-'
-                      - !Select
-                        - 2
-                        - !Split
-                          - /
-                          - !Ref 'AWS::StackId'
-                      - '`/g'' /tmp/rds-cluster-prep.sql'
-                  - !Join
-                    - ''
-                    - - sudo sed -i 's/<database-name>/`quickfix`/g' /tmp/rds-cluster-prep.sql
-                  - !Join
-                    - ''
-                    - - mysql --user $ADMIN_DB_USERNAME --host $DB_HOST --ssl-mode
-                        disabled --execute 'source /tmp/rds-cluster-prep.sql'
-            name: CreateDBObjects
-            onFailure: step:TerminateInstanceOnFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: TerminateInstances
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Service: ec2
-            name: TerminateInstanceOnSuccess
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: SignalResource
-              LogicalResourceId: RDSClusterInitializationWaiter
-              Service: cloudformation
-              StackName: !Ref 'AWS::StackName'
-              Status: SUCCESS
-              UniqueId: !Ref 'RDSCluster'
-            isEnd: true
-            name: SignalSuccess
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: TerminateInstances
-              InstanceIds:
-                - '{{LaunchInstance.InstanceIds}}'
-              Service: ec2
-            name: TerminateInstanceOnFailure
-            onFailure: step:SignalFailure
-          - action: aws:executeAwsApi
-            inputs:
-              Api: SignalResource
-              LogicalResourceId: RDSClusterInitializationWaiter
-              Service: cloudformation
-              StackName: !Ref 'AWS::StackName'
-              Status: FAILURE
-              UniqueId: !Ref 'RDSCluster'
-            isEnd: true
-            name: SignalFailure
-        parameters:
-          ExecutionRoleArn:
-            default: !GetAtt 'RDSClusterPrepExecutionRole.Arn'
-            description: The service role to use for this automation.
-            type: String
-          LatestUbuntu2004AMIId:
-            default: '{{ssm:/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
-            description: The latest Ubuntu 20.04 LTS AMI queried from the public parameter.
-            type: String
-        schemaVersion: '0.3'
-      DocumentType: Automation
-    Type: AWS::SSM::Document
-  RDSParameterGroup:
-    Properties:
-      Description: !Join
-        - ''
-        - - 'Parameter group for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
-      Family: aurora5.6
-      Parameters:
-        long_query_time: 5
-        slow_query_log: 1
-    Type: AWS::RDS::DBParameterGroup
   Route53HealthCheckVPCPrefixList:
     Properties:
       AddressFamily: IPv4
@@ -3462,7 +1976,7 @@ Resources:
       Properties:
         Action: lower
         InputString: !Ref 'AWS::StackName'
-      ServiceToken: !GetAtt 'MiscMethodsHandlerFunction.Arn'
+      ServiceToken: !GetAtt 'MiscMethodsHandler.Arn'
       Type: Custom::ManipulateString
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
@@ -3496,7 +2010,7 @@ Resources:
             - !Ref 'AWS::StackName'
             - ' stack'
         PrefixListId: !Ref 'UserApplicationVPCPrefixList'
-      ServiceToken: !GetAtt 'VPCPrefixListManagerFunction.Arn'
+      ServiceToken: !GetAtt 'VPCPrefixListManager.Arn'
       Type: Custom::UpdateUserApplicationPrefixList
       Version: '1.0'
     Type: AWS::CloudFormation::CustomResource
@@ -3510,112 +2024,57 @@ Resources:
           - '-'
           - UserAppCIDRs
     Type: AWS::EC2::PrefixList
-  VPCPrefixListManagerFunction:
-    Condition: ''
+  VPCPrefixListManager:
     DependsOn:
       - VPCPrefixListManagerRole
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: This function is only invoked during the deployment of this solution,
-              potentially PRIOR to the creation of a VPC, and is never used again.
-          - id: W92
-            reason: This function is only invoked during the deployment of this solution
-              and is never used again. Reserving concurrency would therefore be wasteful.
     Properties:
+      Architectures:
+        - x86_64
       Code:
-        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\n\
-          from botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\n\
-          LOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
-          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - PrefixListId\
-          \ | str\n    - AuthorizedCidrs | list\n    - EntryDescription | str\n'''\n\
-          def handler(event, context):\n\n    LOGGER.info('----- REQUEST RECEIVED\
-          \ -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n\
-          \    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n\
-          \    properties = event['ResourceProperties']['Properties']\n    \n    #\
-          \ If the Stack is Being Created or Updated\n    if event['RequestType']\
-          \ in ['Create', 'Update']:\n        \n        ec2_client = boto3.client('ec2')\n\
-          \        \n        try:\n            \n            prefix_list = ec2_client.describe_managed_prefix_lists(\n\
-          \                PrefixListIds = [\n                    properties['PrefixListId']\n\
-          \                ]\n            )\n            \n            if len(prefix_list['PrefixLists'])\
-          \ == 0:\n                print('Prefix List w/ ID: ' + properties['PrefixListId']\
-          \ + ' Could Not be Found')\n                return cfnresponse.send(event,\
-          \ context, cfnresponse.FAILED, responseData)\n                \n       \
-          \     else:\n                prefix_list = prefix_list['PrefixLists'][0]\n\
-          \                \n            existing_entries = ec2_client.get_managed_prefix_list_entries(\n\
-          \                PrefixListId = prefix_list['PrefixListId'],\n         \
-          \   )\n        \n        except ClientError as e:\n            print(str(e))\n\
-          \            return cfnresponse.send(event, context, cfnresponse.FAILED,\
-          \ responseData)\n            \n        new_entries = properties['AuthorizedCidrs']\n\
-          \        \n        entries_to_add = []\n        entries_to_remove = []\n\
-          \        \n        # If There Are Existing Entries\n        if len(existing_entries['Entries'])\
-          \ > 0:\n            \n            # For Each Existing Entry\n          \
-          \  for existing_entry in existing_entries['Entries']:\n                \n\
-          \                # If the CIDR is No Longer Authorized\n               \
-          \ if existing_entry['Cidr'] not in new_entries:\n                    \n\
-          \                    # We'll Queue it for Removal\n                    entries_to_remove.append({\n\
-          \                        'Cidr': existing_entry['Cidr']\n              \
-          \      })\n                \n                # Else, We'll Remove it from\
-          \ our \"New Entries\" List\n                else:\n                    new_entries.remove(existing_entry['Cidr'])\n\
-          \        \n        # For Each New Entry Remaining\n        for new_entry\
-          \ in new_entries:\n            \n            # We'll Format its Input\n\
-          \            entries_to_add.append({\n                'Cidr': new_entry,\n\
-          \                'Description': properties['EntryDescription'],\n      \
-          \      })\n        \n        # If There's at Least 1 Entry to Add or Remove\n\
-          \        if len(entries_to_add) > 0 or len(entries_to_remove) > 0:\n   \
-          \         \n            try:\n                \n                # We'll\
-          \ Try to Update the List\n                ec2_client.modify_managed_prefix_list(\n\
-          \                    PrefixListId = prefix_list['PrefixListId'],\n     \
-          \               CurrentVersion = prefix_list['Version'],\n             \
-          \       AddEntries = entries_to_add,\n                    RemoveEntries\
-          \ = entries_to_remove,\n                )\n                \n          \
-          \  except ClientError as e:\n                print(str(e))\n           \
-          \     return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n\
-          \        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS,\
-          \ responseData, properties['PrefixListId'])\n    \n    # If the Stack is\
-          \ Being Deleted   \n    elif event['RequestType'] in ['Delete']:\n     \
-          \   \n        # CFN Can Delete Prefix Lists Containing Entries, So There's\
-          \ Nothing For Us to Do\n        return cfnresponse.send(event, context,\
-          \ cfnresponse.SUCCESS, responseData)"
-      Description: !Join
-        - ''
-        - - 'VPCPrefixListManager resource for '
-          - !Ref 'AWS::StackName'
-          - ' stack'
+        ZipFile: "import json\nimport boto3\nimport logging\nimport cfnresponse\nfrom botocore.exceptions import ClientError\n\nLOGGER = logging.getLogger()\nLOGGER.setLevel(logging.INFO)\nlogging.getLogger('boto3').setLevel(logging.INFO)\n\
+          logging.getLogger('botocore').setLevel(logging.INFO)\n\n'''\n    - PrefixListId | str\n    - AuthorizedCidrs | list\n    - EntryDescription | str\n'''\ndef handler(event, context):\n\n    LOGGER.info('-----\
+          \ REQUEST RECEIVED -----')\n    LOGGER.info(json.dumps(event))\n\n    responseData = {}\n    \n    operation = event['ResourceProperties']['Type'].split('Custom::')[1]\n    properties = event['ResourceProperties']['Properties']\n\
+          \    \n    # If the Stack is Being Created or Updated\n    if event['RequestType'] in ['Create', 'Update']:\n        \n        ec2_client = boto3.client('ec2')\n        \n        try:\n      \
+          \      \n            prefix_list = ec2_client.describe_managed_prefix_lists(\n                PrefixListIds = [\n                    properties['PrefixListId']\n                ]\n           \
+          \ )\n            \n            if len(prefix_list['PrefixLists']) == 0:\n                print('Prefix List w/ ID: ' + properties['PrefixListId'] + ' Could Not be Found')\n                return\
+          \ cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n                \n            else:\n                prefix_list = prefix_list['PrefixLists'][0]\n                \n     \
+          \       existing_entries = ec2_client.get_managed_prefix_list_entries(\n                PrefixListId = prefix_list['PrefixListId'],\n            )\n        \n        except ClientError as e:\n\
+          \            print(str(e))\n            return cfnresponse.send(event, context, cfnresponse.FAILED, responseData)\n            \n        new_entries = properties['AuthorizedCidrs']\n        \n\
+          \        entries_to_add = []\n        entries_to_remove = []\n        \n        # If There Are Existing Entries\n        if len(existing_entries['Entries']) > 0:\n            \n            # For\
+          \ Each Existing Entry\n            for existing_entry in existing_entries['Entries']:\n                \n                # If the CIDR is No Longer Authorized\n                if existing_entry['Cidr']\
+          \ not in new_entries:\n                    \n                    # We'll Queue it for Removal\n                    entries_to_remove.append({\n                        'Cidr': existing_entry['Cidr']\n\
+          \                    })\n                \n                # Else, We'll Remove it from our \"New Entries\" List\n                else:\n                    new_entries.remove(existing_entry['Cidr'])\n\
+          \        \n        # For Each New Entry Remaining\n        for new_entry in new_entries:\n            \n            # We'll Format its Input\n            entries_to_add.append({\n            \
+          \    'Cidr': new_entry,\n                'Description': properties['EntryDescription'],\n            })\n        \n        # If There's at Least 1 Entry to Add or Remove\n        if len(entries_to_add)\
+          \ > 0 or len(entries_to_remove) > 0:\n            \n            try:\n                \n                # We'll Try to Update the List\n                ec2_client.modify_managed_prefix_list(\n\
+          \                    PrefixListId = prefix_list['PrefixListId'],\n                    CurrentVersion = prefix_list['Version'],\n                    AddEntries = entries_to_add,\n             \
+          \       RemoveEntries = entries_to_remove,\n                )\n                \n            except ClientError as e:\n                print(str(e))\n                return cfnresponse.send(event,\
+          \ context, cfnresponse.FAILED, responseData)\n        \n        return cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, properties['PrefixListId'])\n    \n    # If the Stack\
+          \ is Being Deleted   \n    elif event['RequestType'] in ['Delete']:\n        \n        # CFN Can Delete Prefix Lists Containing Entries, So There's Nothing For Us to Do\n        return cfnresponse.send(event,\
+          \ context, cfnresponse.SUCCESS, responseData)"
+      Description: ''
       Handler: index.handler
-      KmsKeyArn: !If
-        - KMSKeySupplied
-        - !Ref 'KMSKeyARN'
-        - ''
+      Layers: []
+      MemorySize: 128
       Role: !GetAtt 'VPCPrefixListManagerRole.Arn'
-      Runtime: python3.7
-      Timeout: 15
+      Runtime: python3.9
+      Timeout: 60
+      TracingConfig:
+        Mode: PassThrough
     Type: AWS::Lambda::Function
   VPCPrefixListManagerLogGroup:
-    Condition: ''
+    DeletionPolicy: Delete
     DependsOn:
-      - VPCPrefixListManagerFunction
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W84
-            reason: These logs do not contain sensitive data.
+      - VPCPrefixListManager
     Properties:
       LogGroupName: !Join
         - ''
         - - /aws/lambda/
-          - !Ref 'VPCPrefixListManagerFunction'
-      RetentionInDays: !Ref 'LogRetentionInDays'
+          - !Ref 'VPCPrefixListManager'
+      RetentionInDays: 30
     Type: AWS::Logs::LogGroup
   VPCPrefixListManagerRole:
-    Condition: ''
     DependsOn: []
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W11
-            reason: ec2:DescribeManagedPrefixLists does not support resource filtering.
     Properties:
       AssumeRolePolicyDocument:
         Statement:
@@ -3627,6 +2086,7 @@ Resources:
                 - lambda.amazonaws.com
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
       Policies:
         - PolicyDocument:
             Statement:
@@ -3642,5 +2102,5 @@ Resources:
                 Resource:
                   - !GetAtt 'FIXClientVPCPrefixList.Arn'
                   - !GetAtt 'UserApplicationVPCPrefixList.Arn'
-          PolicyName: PrimaryPolicy
+          PolicyName: main-policy
     Type: AWS::IAM::Role
