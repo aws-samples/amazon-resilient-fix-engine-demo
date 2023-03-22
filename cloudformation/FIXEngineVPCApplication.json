@@ -251,7 +251,7 @@
   "Comments": "",
   "CreatedBy": "Carter Meyers (AWS)",
   "Description": "This application deploys a highly resilient FIX Engine application on AWS.",
-  "LastUpdated": "March 20, 2023",
+  "LastUpdated": "March 22, 2023",
   "Version": "v2.0"
  },
  "Outputs": {
@@ -3438,9 +3438,15 @@
    "Type": "AWS::EC2::SecurityGroup"
   },
   "MemoryDbAcl": {
+   "DependsOn": [
+    "StackNameManipulator"
+   ],
    "Properties": {
     "ACLName": {
-     "Ref": "AWS::StackName"
+     "Fn::GetAtt": [
+      "StackNameManipulator",
+      "OutputString"
+     ]
     }
    },
    "Type": "AWS::MemoryDB::ACL"
@@ -3448,15 +3454,22 @@
   "MemoryDbCluster": {
    "DependsOn": [
     "MemoryDbAcl",
-    "MemoryDbSubnetGroup"
+    "MemoryDbSubnetGroup",
+    "StackNameManipulator"
    ],
    "Properties": {
     "ACLName": {
-     "Ref": "AWS::StackName"
+     "Fn::GetAtt": [
+      "StackNameManipulator",
+      "OutputString"
+     ]
     },
     "AutoMinorVersionUpgrade": false,
     "ClusterName": {
-     "Ref": "AWS::StackName"
+     "Fn::GetAtt": [
+      "StackNameManipulator",
+      "OutputString"
+     ]
     },
     "NodeType": "db.r6g.large",
     "NumReplicasPerShard": 1,
@@ -3467,7 +3480,10 @@
      }
     ],
     "SubnetGroupName": {
-     "Ref": "AWS::StackName"
+     "Fn::GetAtt": [
+      "StackNameManipulator",
+      "OutputString"
+     ]
     },
     "TLSEnabled": true
    },
@@ -3475,12 +3491,16 @@
   },
   "MemoryDbSubnetGroup": {
    "DependsOn": [
+    "StackNameManipulator",
     "PrimaryPublicSubnet",
     "FailoverPublicSubnet"
    ],
    "Properties": {
     "SubnetGroupName": {
-     "Ref": "AWS::StackName"
+     "Fn::GetAtt": [
+      "StackNameManipulator",
+      "OutputString"
+     ]
     },
     "SubnetIds": [
      {

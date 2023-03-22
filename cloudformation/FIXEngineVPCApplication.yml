@@ -133,7 +133,7 @@ Metadata:
   Comments: ''
   CreatedBy: Carter Meyers (AWS)
   Description: This application deploys a highly resilient FIX Engine application on AWS.
-  LastUpdated: March 20, 2023
+  LastUpdated: March 22, 2023
   Version: v2.0
 Outputs:
   ApplicationID:
@@ -1810,31 +1810,35 @@ Resources:
       VpcId: !Ref 'VPC'
     Type: AWS::EC2::SecurityGroup
   MemoryDbAcl:
+    DependsOn:
+      - StackNameManipulator
     Properties:
-      ACLName: !Ref 'AWS::StackName'
+      ACLName: !GetAtt 'StackNameManipulator.OutputString'
     Type: AWS::MemoryDB::ACL
   MemoryDbCluster:
     DependsOn:
       - MemoryDbAcl
       - MemoryDbSubnetGroup
+      - StackNameManipulator
     Properties:
-      ACLName: !Ref 'AWS::StackName'
+      ACLName: !GetAtt 'StackNameManipulator.OutputString'
       AutoMinorVersionUpgrade: false
-      ClusterName: !Ref 'AWS::StackName'
+      ClusterName: !GetAtt 'StackNameManipulator.OutputString'
       NodeType: db.r6g.large
       NumReplicasPerShard: 1
       NumShards: 1
       SecurityGroupIds:
         - !Ref 'MemoryDBSecurityGroup'
-      SubnetGroupName: !Ref 'AWS::StackName'
+      SubnetGroupName: !GetAtt 'StackNameManipulator.OutputString'
       TLSEnabled: true
     Type: AWS::MemoryDB::Cluster
   MemoryDbSubnetGroup:
     DependsOn:
+      - StackNameManipulator
       - PrimaryPublicSubnet
       - FailoverPublicSubnet
     Properties:
-      SubnetGroupName: !Ref 'AWS::StackName'
+      SubnetGroupName: !GetAtt 'StackNameManipulator.OutputString'
       SubnetIds:
         - !Ref 'PrimaryPrivateSubnet'
         - !Ref 'FailoverPrivateSubnet'
