@@ -133,8 +133,8 @@ Metadata:
   Comments: ''
   CreatedBy: Carter Meyers (AWS)
   Description: This application deploys a highly resilient FIX Engine application on AWS.
-  LastUpdated: March 22, 2023
-  Version: v2.0
+  LastUpdated: March 26, 2023
+  Version: v2.03
 Outputs:
   ApplicationID:
     Condition: ''
@@ -255,10 +255,10 @@ Parameters:
     Description: The desired FIX engine version.
     Type: String
   FailoverAvailabilityZoneLetter:
-    Default: c
+    Default: b
     Description: >-
-      The letter of the AWS Availability Zone you wish to use for your failover resources. The reason this parameter exists is because some services used by this solution are only available in certain availability
-      zones (e.g., MemoryDB). Therefore, depending on which region you deploy this solution to, you may need to modify this parameter to launch resources into an availability zone that supports these resources.
+      The letter of the Availability Zone (AZ) you wish to use for your failover resources. MemoryDB is only available in select AZs. If you deploy this solution and are told the AZs you selected are not
+      available, deploy the solution again using the AZ letters included in the error message.
     Type: String
   FailoverPrivateSubnetCIDR:
     Default: 10.10.6.0/23
@@ -301,10 +301,10 @@ Parameters:
     Description: The number of days CloudWatch-bound application logs should be kept.
     Type: String
   PrimaryAvailabilityZoneLetter:
-    Default: b
+    Default: a
     Description: >-
-      The letter of the AWS Availability Zone you wish to use for your primary resources. The reason this parameter exists is because some services used by this solution are only available in certain availability
-      zones (e.g., MemoryDB). Therefore, depending on which region you deploy this solution to, you may need to modify this parameter to launch resources into an availability zone that supports these resources.
+      The letter of the Availability Zone (AZ) you wish to use for your primary resources. MemoryDB is only available in select AZs. If you attempt to deploy this solution and are told the AZs you selected
+      are not available, deploy the solution again using the AZ letters included in the error message.
     Type: String
   PrimaryPrivateSubnetCIDR:
     Default: 10.10.4.0/23

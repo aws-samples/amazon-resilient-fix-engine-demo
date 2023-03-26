@@ -131,8 +131,8 @@ Metadata:
   Comments: ''
   CreatedBy: Carter Meyers (AWS)
   Description: This application deploys a highly resilient FIX Engine application on AWS.
-  LastUpdated: March 22, 2023
-  Version: v2.0
+  LastUpdated: March 26, 2023
+  Version: v2.03
 Outputs:
   ApplicationID:
     Condition: ''
