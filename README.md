@@ -14,24 +14,26 @@
 - Upgrading the protocol and integrating new clients also requires extensive and labor-intensive testing of the proposed FIX infrastructure without disturbing existing Production connectivity.
 - This requires an engine architecture that's trivial to set up, tear down, scale horizontally and test in parallel.
 - The aim of this project is to provide such a solution.
+- ![No Resilience Architecture](FIX_SERVER_NO_RESILIENCE.png)
 
 ## Purpose
 - Build a cloud-native, highly available resilient FIX engine for financial services industry (FSI) to demonstrate how easy AWS makes it to quickly deploy and easily run complex, real-time services.
 - Enable migration of proprietary protocols and low-latency on-prem FSI trading services to AWS.
 - Demonstrate how this design pattern can be deployed and used with AWS products and services, with a clear focus on security, scale, and distinguishable operational excellence
 - Provide example code that users can adapt to meet this and other similar use cases
+- ![FIX Client](FIX_CLIENT.png)
+- ![FIX SERVER](FIX_SERVER.png)
 
 
 ## Architecture
-- Open-source QuickFix engine and encoding/decoding libraries with Amazon's multi-region [Aurora MySQL](https://aws.amazon.com/rds/aurora/) database and [MSK](https://aws.amazon.com/msk/) (managed Kafka) queues as well as [Fargate](https://aws.amazon.com/fargate/) (managed Docker) containers, resilience and high availability becomes extremely simple to achieve.
-- Amazon's [VPC](https://aws.amazon.com/vpc/) (Virtual Public Cloud), [NLB](https://aws.amazon.com/elasticloadbalancing/network-load-balancer/) (Network Load Balancer) and [Global Accelerator](https://aws.amazon.com/global-accelerator/) (intelligent network routing) technologies make it easy to securely expose the FIX service to internal and external users, and route them to the active engine instance.
-- [CloudFormation](https://aws.amazon.com/cloudformation/) (infrastructure-as code) and [SSM](https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html) (Systems Manager) allow users to automatically create every component required to run a FIX server or client in a matter of minutes, and to reconfigure it without having to recreate it.
-- Java engine deployed as a container on [Fargate ECS](https://aws.amazon.com/fargate/) (Managed Elastic Container Service)
-- [Multi-AZ](https://aws.amazon.com/rds/features/multi-az/) (Availability Zone), [multi-master](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-multi-master.html) database (Aurora MySQL) keep primary and secondary engine states in sync
+- This architetre's resilience for the open-source QuickFix engine and its encoding/decoding libraries are provided by Amazon's multi-zonal [MemoryDB for Redis](https://aws.amazon.com/memorydb/), which acts as a database, queue and distributed lock, as well as [Fargate](https://aws.amazon.com/fargate/) (managed Docker) containers.
+- Security and network routing and failover is provided Amazon's [VPC](https://aws.amazon.com/vpc/) (Virtual Public Cloud), [NLB](https://aws.amazon.com/elasticloadbalancing/network-load-balancer/) (Network Load Balancer) and [Global Accelerator](https://aws.amazon.com/global-accelerator/) (intelligent network routing) technologies, which make it easy to securely expose the FIX service to internal and external users, and route them to the active engine instance.
+- Infrastructure-as-Code (IoC) is provided by [CloudFormation](https://aws.amazon.com/cloudformation/) (infrastructure-as code) and [SSM](https://docs.aws.amazon.com/systems-manager/latest/userguide/ssm-agent.html) (Systems Manager), which allow users to automatically create every component required to run a FIX server or client in a matter of minutes, and to reconfigure it without having to recreate it.
+- The Java engine is deployed as a container on [Fargate ECS](https://aws.amazon.com/fargate/) (Managed Elastic Container Service)
+- [Multi-AZ](https://aws.amazon.com/rds/features/multi-az/) (Availability Zone) MemoryDB keeps primary and secondary engine states in sync
 - The secondary engine is kept in hot-standby mode (always running but not processing messages until it detects that it's become the primary)
-- Multi-AZ [MSK](https://aws.amazon.com/msk/) (Managed Kafka) allows seamless client failover
 - [Global Accelerator](https://aws.amazon.com/global-accelerator/) transparently redirects clients to the currently active FIX engine
-- Internal SQL-based heartbeat uses a MySQL database table row as a mutex lock which allows FIX engines to perform leader election without external watchers
+- Leader election heartbeat uses a MemoryDB record as a mutex lock which allows FIX engines to perform leader election without external watchers
 - ![Architecture](FIX_ARCH.png)
 
 ## AWS vs. On-Prem Architecture
@@ -115,14 +117,8 @@ sudo ln -s /opt/gradle-6.6.1 /opt/gradle <br>
 - Update .bash_profile to add below <br> 
 export GRADLE_HOME=/opt/gradle <br>
 export PATH=$PATH:\/opt/gradle/bin <br>
-- Get MSK broker endpoint for both server and client MSK. Go to MSK, client client MSK and note down the broker endpoints <br>
-![MSK Brokers](./images/msk-brokers.png)
-- Repeats same steps to get server MSK broker endpoints
-- Update src/main/resources/config/test-client.cfg to update KafkaBootstrapBrokerString, NoOfMessages and WaitBetweenMessages
-KafkaBootstrapBrokerString="<fix-client-broker-1>:9092,<fix-client-broker-2>:9092" <br>
-NoOfMessages=30
-- Update src/main/resources/config/test-server.cfg to update KafkaBootstrapBrokerString
-KafkaBootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9092"
+- Update src/main/resources/config/test-client.cfg to update MemoryDBHost, MemoryDBPort, NoOfMessages and WaitBetweenMessages
+- Update src/main/resources/config/test-server.cfg to update MemoryDBHost, MemoryDBPort
 - Create a local build if you are planning to modify code or you could use the already built jar located at build/libs/fixengineonaws.jar <br>
 cd amazon-resilient-fix-engine-demo <br>
 -- create local build, skip this step is not modifying code <br>
@@ -133,18 +129,6 @@ cd amazon-resilient-fix-engine-demo <br>
 - Open a terminal window and run the test client on FIX Client side <br>
 cd amazon-resilient-fix-engine-demo <br>
 ./scripts/runtestclient.sh 
-- Open a terminal window and monitor execution reports received back by FIX Client MSK <br>
-export PS1="MSK-Client-1 >" <br>
-cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin <br>
-export BootstrapBrokerString="<fix-client-broker-1>:9092,<fix-client-broker-2>:9092" <br>
-./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString <br>
-./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
-- Open a terminal window and and ,onitor order received by FIX Server MSK <br>
-export PS1="MSK-Server-1 >" <br>
-cd /home/ec2-user/environment/kafka_2.12-2.2.1/bin <br>
-export BootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9092" <br>
-./kafka-topics.sh --list --bootstrap-server $BootstrapBrokerString <br>
-./kafka-console-consumer.sh --bootstrap-server $BootstrapBrokerString --topic FROM-FIX-ENGINE --from-beginning <br>
 ![FIX Test Terminals](./images/fix-test-terminals.png)
 
 ## Testing for Resilience and Failover
@@ -161,10 +145,9 @@ export BootstrapBrokerString="<fix-server-broker-1>:9092,<fix-server-broker-2>:9
 - It takes approxmately 15-30 seconds for passive FIX engine become active. 
 
 ## Throughput Considerations
-- Below RDS, ECS and Kafka configuration provides approximately 200 TPS on single partitioned topic with replication factor of 2. AWS FIX Engine Team is working on increasing the throughput with horizontal and vertical scaling in upcoming releases. 
-- 2 Node Kafka Cluster with intsance size kafka.m5.large 
+- Below RDS, ECS and MemoryDB configuration provides approximately 500 TPS on single partitioned topic with replication factor of 2. This capacity can be increased lienarly by running additional copies of the engine, with a separate FIX connection each, and sharding independent data across them.
 - ECS Task: Task CPU (unit) 512 Task memory (MiB): 1024
-- 2 Node Aurora MySQL Multi-Master with instance type db.r4.2xlarge
+- 2-Node MemoryDB cluster with instance type db.r6g.large
 
 
 ## API Documentation
