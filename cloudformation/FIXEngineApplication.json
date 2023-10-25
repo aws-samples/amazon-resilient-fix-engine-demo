@@ -642,7 +642,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 180
             },
             "Type": "AWS::Lambda::Function"
@@ -1630,7 +1630,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 15
             },
             "Type": "AWS::Lambda::Function"
@@ -3091,7 +3091,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 15
             },
             "Type": "AWS::Lambda::Function"
@@ -3496,7 +3496,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 15
             },
             "Type": "AWS::Lambda::Function"
@@ -4395,7 +4395,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 15
             },
             "Type": "AWS::Lambda::Function"
@@ -6490,7 +6490,7 @@
                         "Arn"
                     ]
                 },
-                "Runtime": "python3.7",
+                "Runtime": "python3.10",
                 "Timeout": 15
             },
             "Type": "AWS::Lambda::Function"
