@@ -410,7 +410,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'AutomationDocumentStarterRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 180
     Type: AWS::Lambda::Function
   AutomationDocumentStarterLogGroup:
@@ -976,7 +976,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'ECSImageRemoverRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 15
     Type: AWS::Lambda::Function
   ECSImageRemoverLogGroup:
@@ -1693,7 +1693,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'GlobalAcceleratorInfoRetrieverRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 15
     Type: AWS::Lambda::Function
   GlobalAcceleratorInfoRetrieverLogGroup:
@@ -1928,7 +1928,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'MSKClusterInfoRetrieverRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 15
     Type: AWS::Lambda::Function
   MSKClusterInfoRetrieverLogGroup:
@@ -2417,7 +2417,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'MiscMethodsHandlerRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 15
     Type: AWS::Lambda::Function
   MiscMethodsHandlerLogGroup:
@@ -3589,7 +3589,7 @@ Resources:
         - !Ref 'KMSKeyARN'
         - ''
       Role: !GetAtt 'VPCPrefixListManagerRole.Arn'
-      Runtime: python3.7
+      Runtime: python3.10
       Timeout: 15
     Type: AWS::Lambda::Function
   VPCPrefixListManagerLogGroup:
