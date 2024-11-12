@@ -2,26 +2,13 @@ package com.amazonaws.fixengineonaws;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.sql.CallableStatement;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
+import java.util.Date;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
 
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.globalaccelerator.AWSGlobalAccelerator;
@@ -44,7 +31,6 @@ import quickfix.IncorrectDataFormat;
 import quickfix.IncorrectTagValue;
 import quickfix.Initiator;
 import quickfix.InvalidMessage;
-import quickfix.JdbcStoreFactory;
 import quickfix.LogFactory;
 import quickfix.Message;
 import quickfix.MessageFactory;
@@ -58,35 +44,61 @@ import quickfix.SocketAcceptor;
 import quickfix.SocketInitiator;
 import quickfix.UnsupportedMessageType;
 
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.params.SetParams;
+
+//TODO: Test debug logging
+//TODO: Test with memorydb
+
+/*
+ * To test locally, please Install Ubuntu Linux and Redis on Windows: https://redis.io/docs/getting-started/installation/install-redis-on-windows/
+ * curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+ * echo \"deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main\" | sudo tee /etc/apt/sources.list.d/redis.list
+ * sudo apt-get update
+ * sudo apt-get install redis
+ * sudo service redis-server start
+ * redis-cli
+ * sudo service redis-server stop
+ * 
+ * To connect from AWS EC2 using TLS, See https://docs.aws.amazon.com/memorydb/latest/devguide/getting-startedclusters.connecttonode.html
+ * 
+ */
+
+
 public class FixEngine implements Application {
     private Logger LOGGER = Logger.getLogger(FixEngine.class.getName());
     private String MY_IP = "???";
-    private boolean IM_AM_THE_ACTIVE_ENGINE = false;
-    private KafkaProducer<String, String> KAFKA_PRODUCER = null;
-    private KafkaConsumer<String, Object> KAFKA_CONSUMER = null;
-    private String KAFKA_INBOUND_TOPIC_NAME;
+    private boolean IM_AM_THE_ACTIVE_ENGINE = false; // TODO: DO WE STILL NEED THIS?
+    private String REDIS_LEADER_LOCK_NAME = RedisSetting.DEFAULT_REDIS_LEADER_LOCK_NAME;
+    private String REDIS_FIX_TO_APP_QUEUE_NAME = RedisSetting.DEFAULT_REDIS_FIX_TO_APP_QUEUE_NAME;
+    private String REDIS_APP_TO_FIX_QUEUE_NAME = RedisSetting.DEFAULT_REDIS_APP_TO_FIX_QUEUE_NAME;
     private long messageCounter = 0;
     private Acceptor FIX_SERVER = null;
     private Initiator FIX_CLIENT = null;
     private Session FIX_SESSION = null;
     private SessionID FIX_SESSION_ID = null;
 
-    private final int LEADER_STATUS_STILL_LEADER = 1;
-    private final int LEADER_STATUS_STILL_NOT_LEADER = 0;
-    private final int LEADER_STATUS_JUST_BECAME_LEADER = -1;
+    private Jedis jedisForAppToFix = null;
+    private Jedis jedisForFixToApp = null;
+    private Jedis jedisForLeaderElection = null;
 
-    private int HEARTBEAT_SLEEP_INTERVAL = 0;
-    private boolean DROP_FIX_MESSAGES = false;
-    private boolean DROP_KAFKA_MESSAGES = false;
+    private final String LEADER_STATUS_STILL_LEADER = "LEADER_STATUS_STILL_LEADER"; // TODO: DO WE STILL NEED THIS?
+    private final String LEADER_STATUS_STILL_NOT_LEADER = "LEADER_STATUS_STILL_NOT_LEADER"; // TODO: DO WE STILL NEED THIS?
+    private final String LEADER_STATUS_JUST_BECAME_LEADER = "LEADER_STATUS_JUST_BECAME_LEADER"; // TODO: DO WE STILL NEED THIS?
+
+    private int HEARTBEAT_SLEEP_INTERVAL = 0; // TODO: move these to Settings?
+    private boolean DROP_FIX_TO_APP_MESSAGES = false; // TODO: move these to Settings?
+    private boolean DROP_APP_TO_FIX_MESSAGES = false; // TODO: move these to Settings?
     
-    private FixEngineConfig fixEngineConfig;
+    private boolean SLOW_DEBUG_MODE = false;
 
-    private long lastStatsLogTime = 0;
-    private long logStatsEvery = 60000;
-    private long totalInboundMessageProcessingTime = 0;
-    private long totalInboundKafkaProcessingTime = 0;
-    private long totalOutboundMessageProcessingTime = 0;
-    private long totalOutboundFixProcessingTime = 0;
+	private Date LAST_NO_MESSAGE_LOG = new Date();
+	private long totalAppToFixProcessngTime = 0;
+	private long totalAppToFixProcessedMessages = 0;
+	private long totalFixToAppProcessngTime = 0;
+	private long totalFixToAppProcessedMessages = 0;
+
+    private FixEngineConfig fixEngineConfig;
 
 	/**
 	 * Constructor creates a LOGGER and a FixEngineConfig using the specified configfile location, in preparation for calling run()
@@ -114,6 +126,14 @@ public class FixEngine implements Application {
 	public void run() {
 	    LOGGER.info(MY_IP+"CONSTRUCTOR: STARTING HEARTBEAT");
 		try {
+		    REDIS_LEADER_LOCK_NAME = fixEngineConfig.getSessionSetting(RedisSetting.SETTING_REDIS_LEADER_LOCK_NAME);
+		    REDIS_FIX_TO_APP_QUEUE_NAME = fixEngineConfig.getSessionSetting(RedisSetting.SETTING_REDIS_FIX_TO_APP_QUEUE_NAME);
+		    REDIS_APP_TO_FIX_QUEUE_NAME = fixEngineConfig.getSessionSetting(RedisSetting.SETTING_REDIS_APP_TO_FIX_QUEUE_NAME);
+
+			String redisHost = fixEngineConfig.getSessionSetting(RedisSetting.SETTING_REDIS_HOST);
+			String redisPort = fixEngineConfig.getSessionSetting(RedisSetting.SETTING_REDIS_PORT);
+			jedisForFixToApp = new Jedis(redisHost, Integer.parseInt(redisPort));
+			jedisForAppToFix = new Jedis(redisHost, Integer.parseInt(redisPort));
 			heartbeatMessageProcessingLoop(fixEngineConfig);
 		} catch (ConfigError e) {
 			LOGGER.severe(MY_IP+"CONSTRUCTOR: ERROR IN HEARTBEAT DUE TO CONFIG ERROR: " + e);
@@ -171,14 +191,13 @@ public class FixEngine implements Application {
 
 	/**
 	 * QuickFixJ Application interface hook - called when a message is received by this process from the FIX connection
-	 * decodes the message and forwards it to Kafka queue 
+	 * decodes the message and forwards it to MemoryDB queue 
 	 */
     @Override
     public void fromApp(Message message, SessionID sessionID) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
         LOGGER.info(MY_IP+"%%%%%%%% FROMAPP: " + message);
-        long timeInFromAppStart = System.currentTimeMillis();
-        
-        if(DROP_FIX_MESSAGES) {
+        Date startTime = new Date();
+        if(DROP_FIX_TO_APP_MESSAGES) {
             LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: DROPPING MESSAGE INSTEAD OF SENDING IT!");        	
         } else {
 	        if (!IM_AM_THE_ACTIVE_ENGINE) {
@@ -188,30 +207,16 @@ public class FixEngine implements Application {
 	        LOGGER.fine(MY_IP+"********************** counter: " + messageCounter++);
 	
 	        String parsedOrdStr = message.toString();
-	        LOGGER.fine(MY_IP+"%%%%%%%% FROMAPP: ***SERVER FIX ENGINE*** PARSED ORDER FIX STRING: " + parsedOrdStr);
-	
-	    //  Object[] array = getKafkaProducer();
-	    //     KafkaProducer<String, String> producer = (KafkaProducer) array[0];
-	    //     String topicName = (String )array[1];
-	
-	        try {
-	            long timeInFromAppKafkaSendStart = System.currentTimeMillis();
-            	if(timeInFromAppKafkaSendStart - lastStatsLogTime > logStatsEvery) {
-            		LOGGER.info(MY_IP+"@@@@@@@@@@ INBOUND TIMING STATISTICS: RESETTING TOTALS SINCE IT'S BEEN OVER A MINUTE SINCE THE LAST MESSAGE");
-            		totalInboundKafkaProcessingTime = 0;
-            		totalInboundMessageProcessingTime = 0;
-            	}
-            	KAFKA_PRODUCER.send(new ProducerRecord<String, String>(KAFKA_INBOUND_TOPIC_NAME, parsedOrdStr)).get();
-	            long timeInFromAppKafkaSendEnd = System.currentTimeMillis();
+	        LOGGER.info(MY_IP+"%%%%%%%% FROMAPP: ***SERVER FIX ENGINE*** PUSHING TO QUEUE NAMED " + REDIS_FIX_TO_APP_QUEUE_NAME + " ORDER FIX STRING: " + parsedOrdStr);
 
-                totalInboundKafkaProcessingTime += timeInFromAppKafkaSendEnd - timeInFromAppKafkaSendStart;
-                totalInboundMessageProcessingTime += timeInFromAppKafkaSendEnd - timeInFromAppStart;
-                LOGGER.info(MY_IP+"@@@@@@@@@@ INBOUND TIMING STATISTICS:\ttotalInboundKafkaProcessingTime:\t" + totalInboundKafkaProcessingTime + "\ttotalInboundMessageProcessingTime:\t" + totalInboundMessageProcessingTime);
+	        try {
+            	jedisForFixToApp.rpush(REDIS_FIX_TO_APP_QUEUE_NAME, parsedOrdStr);
 	        } catch (Exception e) {
 	            LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: Exception:" + e);
 	            e.printStackTrace();
-	        }       
+	        }
         }
+		logStats(false, 1, startTime, new Date());
     }
 
     /**
@@ -241,91 +246,18 @@ public class FixEngine implements Application {
     }
 
     /**
-     * Tries to load the supplied class by name, prints an exception if it's unable to. 
-     * @param jdbcDriver
-     */
-    private void loadJdbcClass(String jdbcDriver) {
-        try {
-            Class.forName(jdbcDriver); 
-        } catch (ClassNotFoundException e) {
-            LOGGER.severe(MY_IP+"UNABLE TO LOAD JDBC DRIVER:" + jdbcDriver);
-            e.printStackTrace();
-            return;
-        }
-        LOGGER.fine(MY_IP+"LOADED JDBC DRIVER:" + jdbcDriver);
-    }
-
-    /**
-     * Creates and returns a JDBC connection
-     * @param jdbcUrl
-     * @param jdbcUser
-     * @param jdbcPass
-     * @return
-     */
-    private Connection getSqlDbConnection(String jdbcUrl, String jdbcUser, String jdbcPass) {        
-        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET ");
-        
-        // System.out.println("CONNECTING TO URL " + jdbcUrl + " WITH USER " + jdbcUser + " AND PASS " + jdbcPass);
-        try {
-            Connection conn = DriverManager.getConnection(jdbcUrl, jdbcUser, jdbcPass);
-            LOGGER.fine(MY_IP+"****GET SQL DB CONNECTION: GOT SQL CONNECTION");
-
-            if (conn != null) {
-                LOGGER.info(MY_IP+"****GET SQL DB CONNECTION: Database connection established");
-                return conn;
-            }
-        } catch (Exception e) {
-            LOGGER.severe(MY_IP+"****GET SQL DB CONNECTION: EXCEPTION: " + e);
-            e.printStackTrace();
-        }
-        return null;    
-    }
-
-	/**
-	 * Creates a KafkaProducer connection to the specified broker
-	 * @param kafkaBrokerString
-	 * @return
-	 */
-    private KafkaProducer<String, String> startKafkaProducer(String kafkaBrokerString) {
-		LOGGER.info(MY_IP+"****START KAFKA OUTBOUND PRODUCER START*****");
-        Properties properties = new Properties();
-        properties.setProperty("bootstrap.servers", kafkaBrokerString);
-        properties.setProperty("key.serializer","org.apache.kafka.common.serialization.StringSerializer");
-        properties.setProperty("value.serializer","org.apache.kafka.common.serialization.StringSerializer");
-        KafkaProducer<String, String> kafkaProducer = new KafkaProducer<String, String>(properties);
-        return kafkaProducer;
-    }
-
-	/**
-	 * Creates a KafkaProducer connection to the specified broker, group and topic
-	 * @param kafkaBrokerString
-	 * @return
-	 */
-    private KafkaConsumer<String, Object> startKafkaConsumer(String kafkaBrokerString, String consumerGroupId, String topicName) {
-        LOGGER.info(MY_IP+"****KAFKA INBOUND CONSUMER START*****");
-        Properties properties = new Properties();
-        properties.setProperty("bootstrap.servers", kafkaBrokerString);
-        properties.setProperty("group.id", consumerGroupId);
-        properties.setProperty("key.deserializer","org.apache.kafka.common.serialization.StringDeserializer");
-        properties.setProperty("value.deserializer","org.apache.kafka.common.serialization.StringDeserializer");
-        // When a group is first created, it has no offset stored to start reading from. This tells it to start
-        // with the earliest record in the stream.
-        properties.setProperty("auto.offset.reset","earliest");
-        KafkaConsumer<String, Object> kafkaConsumer = new KafkaConsumer<>(properties);
-        kafkaConsumer.subscribe(Arrays.asList(topicName));
-        return kafkaConsumer;
-    }
-
-    /**
      * Parses FIX string to a QuickFixJ Message object
      * @param fixString
      * @return
      */
     public Message parseOrder(String fixString) {
-	    try {
+        if(fixString == null || FIX_SESSION_ID == null) {
+    		LOGGER.severe(MY_IP+"****PARSE ORDER: SOMETHING's WRONG! ONE OF THESE IS NULL! EXITING! fixString=" + fixString + "; FIX_SESSION_ID=" + FIX_SESSION_ID);
+        	return null;
+        }
+    	try {
 		    Message parsedOrd = quickfix.MessageUtils.parse(FIX_SESSION, fixString);
-		    LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: PARSED   MESSAGE: " + parsedOrd);
-//		    LOGGER.fine(MY_IP+"****PROCESS KAFKA MSGS: PARSED    HEADER: " + parsedOrd.getHeader());
+		    LOGGER.fine(MY_IP+"****PROCESS MEMORYDB MSGS: PARSED   MESSAGE: " + parsedOrd);
 	        return parsedOrd;
 	    } catch (InvalidMessage e) {
 	    	LOGGER.severe(MY_IP+"ERROR PARSING MESSAGE: " + fixString);
@@ -333,90 +265,105 @@ public class FixEngine implements Application {
 	        return null;
 	    }
     }
-    
+
     /**
-     * Parses FIX-formatted message String from Kafka ConsumerRecord parameter into a QuickFixJ Message object, then sends that object out via the FIX connection 
-     * @param kafkaMessage
+     * prints a 
+     * @param count
+     * @param firstOrderTime
+     * @param lastOrderTime
      */
-    private void processOneInboundKafkaMessage(ConsumerRecord<String, Object> kafkaMessage) {
-        LOGGER.info(MY_IP+"****PROCESS ONE KAFKA MESSAGE: processing " + kafkaMessage.value().toString());
-        if(DROP_KAFKA_MESSAGES) {
-            LOGGER.severe(MY_IP+"****PROCESS ONE KAFKA MESSAGE: DROPPING MESSAGE INSTEAD OF SENDING IT!");        	
-        } else {
-	        Message parsedOrd = parseOrder(kafkaMessage.value().toString());
-	        //[CLIENT FIX ENGINE] SEND ORDER FIX TO SERVER FIX ENGINE
-	        try {
-	        	LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: SENDING MESSAGE TO FIX: " + parsedOrd);
-	            Session.sendToTarget(parsedOrd, FIX_SESSION_ID);
-	        } catch (SessionNotFound se) {
-	        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: SessionNotFound: " + se);
-	            se.printStackTrace();
-	        } catch (Exception e) {
-	        	LOGGER.severe(MY_IP+"****PROCESS KAFKA MSGS: Exception: " + e);
-	            e.printStackTrace();
-	        }
-        }
+    private void logStats(boolean appToFix, int count, Date firstOrderTime, Date lastOrderTime) {
+    	if (count > 0 && lastOrderTime!=null && firstOrderTime!=null) {
+    		long totalTime = 1;
+    		long totalCount = 1;
+    		if(appToFix) {
+    			totalAppToFixProcessngTime += lastOrderTime.getTime() - firstOrderTime.getTime();
+    			totalTime = totalAppToFixProcessngTime;
+    			totalAppToFixProcessedMessages += count;
+    			totalCount = totalAppToFixProcessedMessages;
+    		} else {
+    			totalFixToAppProcessngTime += lastOrderTime.getTime() - firstOrderTime.getTime();
+    			totalTime = totalFixToAppProcessngTime;
+    			totalFixToAppProcessedMessages += count;
+    			totalCount = totalFixToAppProcessedMessages;
+    		}
+	        long totalTimeInSec = (totalTime)/1000;
+	        if (totalTimeInSec < 1) totalTimeInSec = 1;
+	        double tps = totalCount/totalTimeInSec;
+	        LOGGER.info(" ************ Order Generation Performance & Througput Results ******************* ");
+//	        LOGGER.info("\n Start Time: " + DATE_FORMAT.format(firstOrderTime) + 
+//	                    "\n End Time: " + DATE_FORMAT.format(lastOrderTime) + "\n Total Messages Processed: " + count 
+//	                    + "\n Total Processing Time (seconds) " + totalTimeInSec + "\n TPS: " + tps);	        	
+	        LOGGER.info("************* " + (appToFix?"AppToFix":"FixToApp") + ": Total Processing Time (seconds): " + totalTimeInSec + 
+	        		"\t Total Messages Processed: " + totalCount + "\t TPS: " + tps);
+	        LOGGER.info(" ************ ************ ************ ************ ************");
+    	}
     }
 
-    /**\
-     * Polls Kafka queue for new messages and calls processOneInboundKafkaMessage on each to send it out via the FIX connection 
-     * @param kafkaConsumer
+    /**
+     * Parses FIX-formatted message String from MemoryDB ConsumerRecord parameter into a QuickFixJ Message object, then sends that object out via the FIX connection 
+     * @param appToFixMessage
      */
-    private void processInboundKafkaMsgs(KafkaConsumer<String, Object> kafkaConsumer) {
-        LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: ************* after calling getKafkaConsumer ");
-        int count = 0;
-        if(IM_AM_THE_ACTIVE_ENGINE && FIX_SESSION_ID != null) {
-            //Test code
-   //       NewOrderSingle newOrder = new NewOrderSingle(new ClOrdID("12345"), new HandlInst('1'), new Symbol("6758.T"), new Side(Side.BUY), new TransactTime(), new OrdType(OrdType.MARKET));
-            // try {
-            //     FIX_OUTBOUND_SESSION.sendToTarget(newOrder, FIX_OUTBOUND_SESSION_ID);
-            //     Thread.sleep(5000);
-            // } catch (Exception e) {
-            //     e.printStackTrace();
-            // }
-            //Test COde 
-            // Poll for records
-        	
-            ConsumerRecords<String, Object> records = kafkaConsumer.poll(Duration.ofMillis(50));
-            long timeOutKafkaPollEnd = System.currentTimeMillis();
-        	if(timeOutKafkaPollEnd - lastStatsLogTime > logStatsEvery) {
-        		LOGGER.info(MY_IP+"@@@@@@@@@@ OUTBOUND TIMING STATISTICS: RESETTING TOTALS SINCE IT'S BEEN OVER A MINUTE SINCE THE LAST MESSAGE");
-        		totalOutboundFixProcessingTime = 0;
-        		totalOutboundMessageProcessingTime= 0;
+    private void processInboundAppToFixMessages(int maxMessagesToProcess) {
+        LOGGER.fine(MY_IP+"****PROCESSING MEMORYDB MESSAGES");
+        // TODO: This IM_AM_THE_ACTIVE_ENGINE business smells like a race condition we got rid of long ago. try removing it.
+        if(!IM_AM_THE_ACTIVE_ENGINE || FIX_SESSION_ID == null) {
+    		LOGGER.severe(MY_IP+"****PROCESS MemoryDB MSGS: SOMETHING's WRONG! EXITING! IM_AM_THE_ACTIVE_ENGINE IS FALSE? " + IM_AM_THE_ACTIVE_ENGINE + " OR FIX_SESSION_ID IS NULL? " + FIX_SESSION_ID);
+        	return;
+        }
+        Date firstMessageTime = null;
+        Date lastMessageTime = null;
+        int processedMessageCount = 0;
+        while(processedMessageCount < maxMessagesToProcess) {
+//    		LOGGER.info(MY_IP+"****PROCESS MemoryDB MSGS: CHECKING IF IM_AM_THE_ACTIVE_ENGINE " + IM_AM_THE_ACTIVE_ENGINE + " AND FIX_SESSION_ID NOT NULL " + FIX_SESSION_ID);
+    		LOGGER.fine(MY_IP+"****PROCESS MemoryDB MSGS: CHECKING QUEUE " + REDIS_APP_TO_FIX_QUEUE_NAME + " FOR NEW MESSAGES!");
+    		LOGGER.fine(MY_IP+"****PROCESS MemoryDB MSGS: QUEUE HAS " + jedisForAppToFix.llen(REDIS_APP_TO_FIX_QUEUE_NAME) + " NEW MESSAGES!");
+        	String appToFixMessage = jedisForAppToFix.lpop(REDIS_APP_TO_FIX_QUEUE_NAME);
+        	if (appToFixMessage == null) {
+        		if( (new Date().getTime() - LAST_NO_MESSAGE_LOG.getTime())/1000 > 10) {
+        			LOGGER.info(MY_IP+"****PROCESS MemoryDB MSGS: NO MORE MESSAGES TO PULL FROM QUEUE NAMED " + REDIS_APP_TO_FIX_QUEUE_NAME);
+        			LAST_NO_MESSAGE_LOG = new Date();
+        		}
+        		logStats(true, processedMessageCount, firstMessageTime, lastMessageTime);
+	            return;
+        	} else {
+        		LOGGER.info(MY_IP+"****PROCESS MemoryDB MSGS: PULLED A MESSAGE FROM QUEUE NAMED " + REDIS_APP_TO_FIX_QUEUE_NAME + " MESSAGE: " + appToFixMessage);
+        		if(processedMessageCount==0) { firstMessageTime = new Date(); }
+        		processedMessageCount++;
+		        Message parsedOrd = parseOrder(appToFixMessage);
+		        //[CLIENT FIX ENGINE] SEND ORDER FIX TO SERVER FIX ENGINE
+		        try {
+		            if(DROP_APP_TO_FIX_MESSAGES) {
+		                LOGGER.severe(MY_IP+"%%%%%%%% FROMAPP: DROPPING MESSAGE INSTEAD OF SENDING IT!");        	
+		            } else {
+			        	LOGGER.info(MY_IP+"****PROCESS MemoryDB MSGS: SENDING MESSAGE TO FIX SESSION " + FIX_SESSION_ID + " MESSAGE: " + parsedOrd);
+			            Session.sendToTarget(parsedOrd, FIX_SESSION_ID);
+			            lastMessageTime = new Date();
+		            }
+		        } catch (SessionNotFound se) {
+		        	LOGGER.severe(MY_IP+"****PROCESS MemoryDB MSGS: SessionNotFound: " + se);
+		            se.printStackTrace();
+		        } catch (Exception e) {
+		        	LOGGER.severe(MY_IP+"****PROCESS MemoryDB MSGS: Exception: " + e);
+		            e.printStackTrace();
+		        }
         	}
-
-            //LOGGER.fine(MY_IP+" After polling consumer records.count() : " + records.count());
-            // Did we get any?
-            if (records.count() == 0) {
-                // timeout/nothing to read
-	                LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: nothing to read from Kafka");
-            } else {
-	                LOGGER.info(MY_IP+"****PROCESS KAFKA MSGS: got some messages from Kafka");
-                // Yes, loop over records
-                // for(ConsumerRecord<String, String> record: records) {
-                for(ConsumerRecord<String, Object> record: records) {
-                    // Display record and count
-                    count += 1;
-                    LOGGER.fine(MY_IP+ count + ": " + record.value());
-                    long timeOutKafkaMessageProcessStart = System.currentTimeMillis();
-                    processOneInboundKafkaMessage(record);
-                    long timeOutKafkaMessageProcessEnd = System.currentTimeMillis();
-
-                    totalOutboundFixProcessingTime += timeOutKafkaMessageProcessEnd - timeOutKafkaMessageProcessStart;
-                    totalOutboundMessageProcessingTime += timeOutKafkaMessageProcessEnd - timeOutKafkaPollEnd;
-                    LOGGER.info(MY_IP+"@@@@@@@@@@ OUTBOUND TIMING STATISTICS:\tmessageCount:\t" + count + "\ttotalOutboundFixProcessingTime:\t" + totalOutboundFixProcessingTime + "\ttotalOutboundMessageProcessingTime:\t" + totalOutboundMessageProcessingTime);                
-                }
-            }
-        }
+        } // while
+        logStats(true, processedMessageCount, firstMessageTime, lastMessageTime);
     }
-
+    
     /**
      * Re-points Global Accelerator endpoint (specified by myGaEndpointGroupArn) to the endpoint that's running this code (specified by myGaEndpointArn)
      * @param myGaEndpointGroupArn
      * @param myGaEndpointArn
      */
 	private void updateGAEndpoints(String myGaEndpointGroupArn, String myGaEndpointArn) {
-        LOGGER.info(MY_IP+"UPDATE GA ENDPOINT starting for myGaEndpointGroupArn: "+ myGaEndpointGroupArn + " and myGaEndpointArn: "+ myGaEndpointArn);
+    	if(System.getProperty("os.name").contains("Windows")) {
+    		LOGGER.info("FIXENGINECONFIG UPDATE GA ENDPOINTS returning because we're running on Windows not Unix");
+    		return;
+    	}
+    	
+        LOGGER.fine(MY_IP+"UPDATE GA ENDPOINT starting for myGaEndpointGroupArn: "+ myGaEndpointGroupArn + " and myGaEndpointArn: "+ myGaEndpointArn);
         String activeEndpoint = null;
         String passiveEndpoint = null;
         String tobeActiveEndpoint = null;
@@ -447,9 +394,9 @@ public class FixEngine implements Application {
                 passiveEndpoint = endpointId;
             }
 
-            LOGGER.info(MY_IP+"MY ENDPOINT: ID: "+ endpointId + " HEALTH: " + healthState + " WEIGHT: " + weight);
+            LOGGER.fine(MY_IP+"MY ENDPOINT: ID: "+ endpointId + " HEALTH: " + healthState + " WEIGHT: " + weight);
         }
-        LOGGER.info(MY_IP+"UPDATE GA ENDPOINT activeEndpoint: "+ activeEndpoint + " passiveEndpoint: " + passiveEndpoint);
+        LOGGER.fine(MY_IP+"UPDATE GA ENDPOINT activeEndpoint: "+ activeEndpoint + " passiveEndpoint: " + passiveEndpoint);
          //Update the GA endpoint configuration to flip from active to passive endpoint
         Collection<EndpointConfiguration> endpointConfiguration = new ArrayList<EndpointConfiguration> ();
         endpointConfiguration.add(new EndpointConfiguration().withEndpointId(activeEndpoint).withWeight(100));
@@ -459,74 +406,52 @@ public class FixEngine implements Application {
     }
 
 	/**
-	 * Constructs a SQL Connection and uses it to construct a prepared statemetn to call EngineStatus stored procedure used by getLeaderStatus
-	 * @param jdbcDriver
-	 * @param jdbcUrl
-	 * @param jdbcUser
-	 * @param jdbcPass
-	 * @return
-	 */
-	private CallableStatement getHeartbeatSprocStmt(String jdbcDriver, String jdbcUrl, String jdbcUser, String jdbcPass) {
-        LOGGER.fine(MY_IP+"*********************GET HEARTBEAT PROC STATEMENT*********************");              
-        String query = "{CALL EngineStatus(?, ?, ?, ?, ?, ?)}";
-        loadJdbcClass(jdbcDriver);
-        LOGGER.fine(MY_IP+"*****GETHEARTBEATPROCSTATEMENT: Making SQL connection");
-        Connection sqlDbConnection = getSqlDbConnection(jdbcUrl, jdbcUser, jdbcPass);
-        LOGGER.fine(MY_IP+"*****GETHEARTBEATPROCSTATEMENT: connected to SQL DB");
-        try {
-            CallableStatement stmt = sqlDbConnection.prepareCall(query);
-			stmt.setString(1, MY_IP);
-            stmt.registerOutParameter(2, java.sql.Types.INTEGER);
-            stmt.registerOutParameter(3, java.sql.Types.VARCHAR);
-            stmt.registerOutParameter(4, java.sql.Types.TIMESTAMP);
-            stmt.registerOutParameter(5, java.sql.Types.TIMESTAMP);
-            stmt.registerOutParameter(6, java.sql.Types.INTEGER);
-            LOGGER.fine(MY_IP+"****GETHEARTBEATPROCSTATEMENT: SPROC PREPARED STATEMENT CREATED");             
-            return stmt;
-        } catch (SQLException e) {
-            LOGGER.severe(MY_IP+"****GET HEARTBEAT PROC STATEMENT: EXCEPTION: " + e);
-            e.printStackTrace();
-        }
-        return null;
-    }
-
-	/**
-	 * Calls heartbeatSprocStmt to determine if the curren engine is still teh leader, still not the leader, or just became the leader.
+	 * Calls heartbeatSprocStmt to determine if the current engine is still tht leader, still not the leader, or just became the leader.
 	 * @param heartbeatSprocStmt
 	 * @param iAmTheLeader
 	 * @param useJdbcHeartbeat
 	 * @return one of the three LEADER_STATUS_* codes
 	 * @throws SQLException
 	 */
-    private int getLeaderStatus(CallableStatement heartbeatSprocStmt, boolean iAmTheLeader, boolean useJdbcHeartbeat) throws SQLException {
+    private String getLeaderStatus(boolean iAmClientFixEngine, boolean iAmTheLeader, boolean useMemoryDBLeaderLock, int leaderLockDuration) {
 //      LOGGER.fine(MY_IP+"*********************HEARTBEAT********************");  
-        int leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
-        String lastIpAdd = "";
-        Timestamp lastTimestamp = null;
-        Timestamp timeNow = null;
-        int timeDiffSec = 0;
-//      LOGGER.fine(MY_IP+"****HEARTBEAT: USE_JDBC: " + USE_JDBC + "; heartbeatSprocStmt = " + heartbeatSprocStmt);
-        if(!useJdbcHeartbeat) {
+        String leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
+        if(!useMemoryDBLeaderLock) {
             if(iAmTheLeader) {
                 leaderStatus =  LEADER_STATUS_STILL_LEADER;
             } else {
                 leaderStatus = LEADER_STATUS_JUST_BECAME_LEADER;
             }
-            LOGGER.info(MY_IP+"****HEARTBEAT: NO SQL CONNECTION. DEFAULT LEADER STATUS: " + leaderStatus);
-        } else {    
-            try {
-                heartbeatSprocStmt.executeQuery();
-                leaderStatus = heartbeatSprocStmt.getInt(2);
-                lastIpAdd = heartbeatSprocStmt.getString(3);
-                lastTimestamp = heartbeatSprocStmt.getTimestamp(4);
-                timeNow = heartbeatSprocStmt.getTimestamp(5);
-                timeDiffSec = heartbeatSprocStmt.getInt(6);
-				LOGGER.info(MY_IP+"****HEARTBEAT: SQL SPROC SAYS: leaderStatus: " + leaderStatus + "; lastIpAdd: " + lastIpAdd + "; lastTimestamp: " + lastTimestamp + "; timeNow: " + timeNow + "; timeDiffSec: " + timeDiffSec);
-            } catch (SQLException e) {
-                LOGGER.severe(MY_IP+"HEARTBEAT: Exception executing SQL SPROC: " + e);
-                e.printStackTrace();
-                throw e;
-            }
+            LOGGER.fine(MY_IP+"****HEARTBEAT: NO MEMORYDB CONNECTION. DEFAULT LEADER STATUS: " + leaderStatus);
+        } else {
+// TODO: Reuse these params
+        	SetParams setParams = new SetParams().nx().px(leaderLockDuration + (SLOW_DEBUG_MODE?5000:0) );
+        	String myLockValue = MY_IP + ":" + (iAmClientFixEngine?"CLIENT":"SERVER");
+            LOGGER.fine(MY_IP+"****HEARTBEAT: MEMORYDB CONNECTION. CHECKING LOCK: " + REDIS_LEADER_LOCK_NAME + " FOR MY VALUE " + myLockValue);
+            String lockValue = jedisForLeaderElection.get(REDIS_LEADER_LOCK_NAME);
+            LOGGER.fine(MY_IP+"****HEARTBEAT: MEMORYDB CONNECTION. COMPARING LOCK VALUE " + lockValue + " TO MY VALUE " + myLockValue);
+            if(myLockValue.equals(lockValue)) {
+        		if(iAmTheLeader) {
+        			return LEADER_STATUS_STILL_LEADER;
+        		} else {
+                    LOGGER.severe(MY_IP+"****HEARTBEAT: SOMETHING'S WEIRD: I WAS NOT LEADER EVEN THOUGH I WAS HOLDING THE LOCK!");
+        			return LEADER_STATUS_JUST_BECAME_LEADER;
+        		}
+            } else {
+	            LOGGER.fine(MY_IP+"****HEARTBEAT: MEMORYDB CONNECTION. TRYING TO SET LOCK: " + REDIS_LEADER_LOCK_NAME + " WITH VALUE " + myLockValue);
+	        	String result = jedisForLeaderElection.set(REDIS_LEADER_LOCK_NAME, myLockValue, setParams);
+	            LOGGER.fine(MY_IP+"****HEARTBEAT: MEMORYDB CONNECTION. GET LOCK RESULT: " + result);
+	        	// If this call succeeds then the key must have expired
+	        	if("OK".equals(result)) {
+	        		if(iAmTheLeader) {
+	        			return LEADER_STATUS_STILL_LEADER;
+	        		} else {
+	        			return LEADER_STATUS_JUST_BECAME_LEADER;
+	        		}
+	        	} else {
+	        		return LEADER_STATUS_STILL_NOT_LEADER;
+	        	}
+	        }
         }
 		return leaderStatus;
     }
@@ -543,8 +468,9 @@ public class FixEngine implements Application {
 		    LOGGER.info(MY_IP+"START FIX SERVER: FIX_SERVER object already exists!");
 	    } else {
 	        MessageStoreFactory messageStoreFactory = null;
-	        if("true".equals(config.getSessionSetting("UseJdbcMessageStore"))) {
-	        	messageStoreFactory = new JdbcStoreFactory(config.getSessionSettings());
+// TODO: Centralize these magic config setting names!
+	        if("true".equals(config.getSessionSetting("UseMemoryDBMessageStore"))) {
+		        messageStoreFactory = new RedisStoreFactory(config.getSessionSettings());
 	        } else {
 	        	messageStoreFactory = new FileStoreFactory(config.getSessionSettings());
 	        }
@@ -575,8 +501,9 @@ public class FixEngine implements Application {
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_CLIENT object already exists!");
 	    } else {
 	        MessageStoreFactory messageStoreFactoryClient = null;
-	        if("true".equals(config.getSessionSetting("UseJdbcMessageStore"))) { 
-	            messageStoreFactoryClient = new JdbcStoreFactory(config.getSessionSettings());
+// TODO: Centralize these magic config setting names!
+	        if("true".equals(config.getSessionSetting("UseMemoryDBMessageStore"))) { 
+	            messageStoreFactoryClient = new RedisStoreFactory(config.getSessionSettings());
 	        } else {
 	            messageStoreFactoryClient = new FileStoreFactory(config.getSessionSettings());
 	        }                               
@@ -599,7 +526,7 @@ public class FixEngine implements Application {
 		        try {
 		          Thread.sleep(500);  
 		        } catch (InterruptedException ie) {
-		            LOGGER.info(MY_IP+"****QUICKFIX CLIENT START: FixEngine THREAD INTERRUPTED: " + ie);
+		            LOGGER.severe(MY_IP+"****QUICKFIX CLIENT START: FixEngine THREAD INTERRUPTED: " + ie);
 		        }
 		    }
 		    LOGGER.info(MY_IP+"START FIX CLIENT: FIX_OUTBOUND_SESSION_ID connection established: " + FIX_SESSION_ID);
@@ -634,82 +561,76 @@ public class FixEngine implements Application {
      * Calls getHeartbeatSprocStmt to create a DB connection and prepared statement. 
      * Starts a FIX server (to let Global Accelerator health checks on the FIX port pass)
      * Loops forever: 
-     * 	gets leader status from sproc
+     * 	gets leader status from MemoryDB lock object
      *  Stops FIX client if it stops being the leader
-     *  If it becomes the leader, starts Kafka consumer and producer, and the FIX client or server if they aren't already started
-     *  polls for any new Kafka messages
-     *  any new FIX messages will automatically be sent to Kafka by the fromApp method
+     *  If it becomes the leader, connects to MemoryDB, and the FIX client or server if they aren't already started
+     *  polls for any new MemoryDB messages
+     *  any new FIX messages will automatically be sent to MemoryDB by the fromApp method
      * @param config
      * @throws ConfigError
      */
     private void heartbeatMessageProcessingLoop(FixEngineConfig config) throws ConfigError {
-        LOGGER.info(MY_IP+"*****START HEARTBEAT *****");
+        LOGGER.info(MY_IP+"*****STARTING MESSAGE PROCESSING AND HEARTBEAT LOOP *****");
+// TODO: Use a class or something to make these magic strings into variables.
     	boolean iAmClientFixEngine = "initiator".equals(config.getSessionSetting("ConnectionType"));
-    	String kafkaBrokerString = config.getSessionSetting("kafkaBootstrapBrokerString");
-    	String consumerGroupId = config.getSessionSetting("KafkaConsumerGroupID");
-    	String kafkaOutboundTopicName = config.getSessionSetting("KafkaOutboundTopicName");
-    	KAFKA_INBOUND_TOPIC_NAME = config.getSessionSetting("KafkaInboundTopicName");
     	String myGAEndpointGroupArn = iAmClientFixEngine ? null : config.getSessionSetting("GAEndpointGroupArn");
     	String myGAEndpointArn = iAmClientFixEngine ? null : config.getSessionSetting("GAEndpointArn");
-    	boolean useJdbcConnection = "true".equals(config.getSessionSetting("UseJdbcHeartbeat"));
-
-    	CallableStatement heartbeatSprocStmt = null;
-        if(useJdbcConnection) {
-        	config.addSqlDbConnectionCoordinatesToSettings(config.getSessionSetting("RDSClusterSecretArn"));
-            heartbeatSprocStmt = getHeartbeatSprocStmt(config.getSessionSetting("JdbcDriver"), config.getSessionSetting("JdbcURL"), config.getSessionSetting("JdbcUser"), config.getSessionSetting("JdbcPassword"));
+    	boolean useMemoryDBConnection = "true".equals(config.getSessionSetting("UseMemoryDBLeaderLock"));
+    	String memoryDbHost = config.getSessionSetting(RedisSetting.SETTING_REDIS_HOST);
+        int memoryDbPort = Integer.parseInt(config.getSessionSetting(RedisSetting.SETTING_REDIS_PORT));
+    	int leaderLockDuration = Integer.parseInt(config.getSessionSetting("MemoryDBLeaderLockDuration"));
+        
+        if(useMemoryDBConnection) {
+	        jedisForLeaderElection = new Jedis(memoryDbHost, memoryDbPort);
         }
-
+        
         if(!iAmClientFixEngine) {
         	startFixServer(config); // to let health check know we're alive
         }
 
         while(true) { 
-			LOGGER.info(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE);
-			int leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
+			LOGGER.fine(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE);
+			String leaderStatus = LEADER_STATUS_STILL_NOT_LEADER;
 			try {
-				leaderStatus = getLeaderStatus(heartbeatSprocStmt, IM_AM_THE_ACTIVE_ENGINE, useJdbcConnection);
-			} catch (SQLException e) {
-				
+				leaderStatus = getLeaderStatus(iAmClientFixEngine, IM_AM_THE_ACTIVE_ENGINE, useMemoryDBConnection, leaderLockDuration);
+			} catch (Exception e) {
     			LOGGER.severe(MY_IP+"****HEARTBEAT: ***ERROR GETTING LEADER STATUS!*** " + e);
     			e.printStackTrace();
     			LOGGER.severe(MY_IP+"****HEARTBEAT: ***RECREATING HEARTBEAT CONNECTION TO ATTEMPT TO RECOVER!***");
-                heartbeatSprocStmt = getHeartbeatSprocStmt(config.getSessionSetting("JdbcDriver"), config.getSessionSetting("JdbcURL"), config.getSessionSetting("JdbcUser"), config.getSessionSetting("JdbcPassword"));
+    	        if(useMemoryDBConnection) { jedisForLeaderElection = new Jedis(memoryDbHost, memoryDbPort); }
 			}
-			LOGGER.info(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE + " ; leaderStatus: " + leaderStatus);
+			LOGGER.fine(MY_IP+"**************** HEARTBEAT: iAmClientFixEngine: " + iAmClientFixEngine + " ; IM_AM_THE_ACTIVE_ENGINE: " + IM_AM_THE_ACTIVE_ENGINE + " ; leaderStatus: " + leaderStatus);
     		
     	    if(leaderStatus == LEADER_STATUS_JUST_BECAME_LEADER) {
     			LOGGER.info(MY_IP+"****HEARTBEAT: ***I'M STILL LEADER OR JUST BECAME LEADER! ENSURING ENGINES ARE RUNNING!***");
-    	        if(KAFKA_CONSUMER == null) { KAFKA_CONSUMER = startKafkaConsumer(kafkaBrokerString, consumerGroupId, kafkaOutboundTopicName); }
-    	        if(KAFKA_PRODUCER == null) { KAFKA_PRODUCER = startKafkaProducer(kafkaBrokerString); }
     	        if(iAmClientFixEngine) {
     	            startFixClient(config);
     	        } else {
-    	            LOGGER.info(MY_IP+"**************** HEARTBEAT: I AM Server ENGINE***********");
+    	            LOGGER.fine(MY_IP+"**************** HEARTBEAT: I AM Server ENGINE***********");
     	            startFixServer(config);
-    	            if("10.130.0.66".equals(MY_IP)) {
-    	            	LOGGER.severe(MY_IP+"**************** HEARTBEAT: NOT UPDATING GLOBAL ACCELERATOR ENDPOINT BECAUSE WE DONT HAVE ACCESS FROM THIS MACHINE!!!***********");
-    	            } else {
-    	            	updateGAEndpoints(myGAEndpointGroupArn, myGAEndpointArn);
-    	            }
+   	            	updateGAEndpoints(myGAEndpointGroupArn, myGAEndpointArn);
     	        }
     	        IM_AM_THE_ACTIVE_ENGINE = true;
     	    } else if(leaderStatus == LEADER_STATUS_STILL_LEADER) { // Disconnect if connected
-    			LOGGER.info(MY_IP+"****HEARTBEAT: ***STILL LEADER! Keep listening!***");
+    			LOGGER.fine(MY_IP+"****HEARTBEAT: ***STILL LEADER! Keep listening!***");
     	    } else if(leaderStatus == LEADER_STATUS_STILL_NOT_LEADER) { // Disconnect if connected
     			LOGGER.info(MY_IP+"****HEARTBEAT: ***STILL NOT LEADER!***");
-    			KAFKA_CONSUMER = null;
-    			KAFKA_PRODUCER = null;
     			stopFixClient();
 //    	    } else if(leaderStatus == LEADER_STATUS_JUST_BECAME_LEADER) { // Connect!
 //    			LOGGER.info(MY_IP+"****HEARTBEAT: ***I JUST BECAME THE LEADER!***");
 //    	    	startEngine();
     	    }
 
-    	    processInboundKafkaMsgs(KAFKA_CONSUMER);
+// TODO: make this a setting!
+    	    int maxMessagesToProcess = 1000;
+    	    if(FIX_SESSION_ID!=null) {
+    	    	processInboundAppToFixMessages(maxMessagesToProcess);
+    	    }
 
-    	    if(HEARTBEAT_SLEEP_INTERVAL > 0) {
+    	    if(HEARTBEAT_SLEEP_INTERVAL > 0 || SLOW_DEBUG_MODE) {
 	            try {
 	                Thread.sleep(HEARTBEAT_SLEEP_INTERVAL);
+	                if(SLOW_DEBUG_MODE) { Thread.sleep(1000); }
 	            } catch (InterruptedException ie) {
 	                LOGGER.severe(MY_IP+"HEARTBEAT THREAD INTERRUPTED: " +ie);
 	            }
@@ -723,8 +644,9 @@ public class FixEngine implements Application {
      * @throws ConfigError 
      */
     public static void main(String[] args) throws ConfigError {    	
-        String configfile = "config/server_test.cfg";
+//        String configfile = "config/server_test.cfg";
 //        String configfile = "config/client.cfg";
+        String configfile = "config/server-local.config";
         if(args.length > 0) {
             configfile = args[0];
         }

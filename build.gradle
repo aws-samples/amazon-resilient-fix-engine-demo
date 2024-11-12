@@ -1,26 +1,55 @@
-apply plugin: 'java'
-
-
-dependencies {
-    compile fileTree(dir: 'lib', include: '*.jar')
+plugins {
+    id 'java'
 }
 
+repositories {
+    mavenCentral()
+    flatDir {
+        dirs 'lib'
+    }
+}
 
-jar {
-//  into('lib') {from 'lib'}
-/*
-	zip64=true
-	from {
-        configurations.runtime.collect {
-            it.isDirectory() ? it : zipTree(it)
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java', 'src/main/quickfix']  // Added quickfix directory
+        }
+        resources {
+            srcDirs = ['src/main/resources']
         }
     }
-*/
-    baseName = 'fixengineonaws'
+    test {
+        java {
+            srcDirs = ['src/test/java']
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'lib', include: '*.jar')
+}
+
+jar {
+    archiveBaseName = 'fixengineonaws'
+    
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    
     manifest {
         attributes 'Main-Class': 'com.amazonaws.fixengineonaws.FixEngine'
     }
     
-    exclude 'META-INF/*.RSA', 'META-INF/*.SF','META-INF/*.DSA', 'lib/*.jar'
+    exclude 'META-INF/*.RSA', 'META-INF/*.SF','META-INF/*.DSA'
     
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+// Update Java version if needed
+sourceCompatibility = JavaVersion.VERSION_11  // or whatever version you're using
+targetCompatibility = JavaVersion.VERSION_11
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:deprecation']
 }
