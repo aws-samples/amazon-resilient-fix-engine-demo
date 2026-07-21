@@ -230,7 +230,7 @@ public class FixEngine implements Application {
 
     	if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
 		    String GAEndpointArn = System.getenv(parameterName);
-		    LOGGER.fine(MY_IP+"GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]");
+//		    LOGGER.fine(MY_IP+"GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]"); // commented out: logs sensitive value
 		    if(GAEndpointArn == null) {
 		        LOGGER.severe(MY_IP+"GET SSM PARAMETER unable to find System Environment Variable (that should contain the CloudFormation stack name that created all SSM parameters) called: " + parameterName);
 		    }
@@ -249,7 +249,7 @@ public class FixEngine implements Application {
             GetParameterRequest parametersRequest = new GetParameterRequest().withName(key).withWithDecryption(false);
             GetParameterResult parameterResult = SSM_CLIENT.getParameter(parametersRequest);
             String value = parameterResult.getParameter().getValue();
-            LOGGER.fine(MY_IP+"GET SSM PARAMETER got key : [" + key + "] value [" + value + "]");
+//            LOGGER.fine(MY_IP+"GET SSM PARAMETER got key : [" + key + "] value [" + value + "]"); // commented out: logs sensitive value
             return value;
         } catch (Exception e) {
             LOGGER.fine(MY_IP+"GET SSM PARAMETER unable to get key : [" + key + "] : " + e);
@@ -258,7 +258,7 @@ public class FixEngine implements Application {
     }
 
     private static void addSqlDbConnectionCoordinatesToSettings(String secretArn, SessionSettings sessionSettings) {        
-        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using ARN: " + secretArn);
+//        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using ARN: " + secretArn); // commented out: logs sensitive ARN
 //      AWSSecretsManager client  = System.getProperty("os.name").contains("Windows") ? AWSSecretsManagerClientBuilder.standard().withRegion(Regions.US_EAST_1).build() : AWSSecretsManagerClientBuilder.standard().build();
         AWSSecretsManager client  = AWSSecretsManagerClientBuilder.standard().build();
         GetSecretValueRequest getSecretValueRequest = new GetSecretValueRequest().withSecretId(secretArn);
@@ -267,7 +267,8 @@ public class FixEngine implements Application {
         try {
             getSecretValueResult = client.getSecretValue(getSecretValueRequest);
         } catch (Exception e) {
-            LOGGER.severe(MY_IP+"****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e);
+//            LOGGER.severe(MY_IP+"****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e); // commented out: logs sensitive ARN
+            LOGGER.severe(MY_IP+"****GET DB COORDINATES: EXCEPTION getting secret value: " + e);
             e.printStackTrace();
         }
 
@@ -280,14 +281,15 @@ public class FixEngine implements Application {
             sessionSettings.setString("JdbcPassword", parseResult.get("password").toString());
             sessionSettings.setString("JdbcURL", "jdbc:mysql://" + parseResult.get("host").toString() + ":" + parseResult.get("port").toString() + "/quickfix");            
         } catch (ParseException e) {
-            LOGGER.severe(MY_IP+"GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e);
+//            LOGGER.severe(MY_IP+"GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e); // commented out: logs raw secret JSON
+            LOGGER.severe(MY_IP+"GET DB PARAMETERS: ERROR: unable to parse secret JSON: " + e);
             e.printStackTrace();
         }
 
     }
     
     private static Connection getSqlDbConnection(String jdbcUrl, String jdbcUser, String jdbcPass) {        
-        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET ");
+//        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET "); // commented out: logs JDBC URL and username
         
         // System.out.println("CONNECTING TO URL " + jdbcUrl + " WITH USER " + jdbcUser + " AND PASS " + jdbcPass);
         try {
@@ -322,7 +324,7 @@ public class FixEngine implements Application {
 //        LOGGER.info(MY_IP+"OVERRIDE CONFIG FROM SSM PARAMETERS got session params: " + allProperties);
         for (int i = 0; i < allProperties.size(); i++) {
         	Properties sessionProperties = allProperties.get(i);
-            LOGGER.info(MY_IP+"PROPS: " + sessionProperties);
+//            LOGGER.info(MY_IP+"PROPS: " + sessionProperties); // commented out: dumps session properties incl. credentials
             for (Iterator sessionPropertyIter = sessionProperties.entrySet().iterator(); sessionPropertyIter.hasNext(); ) {
             	Map.Entry<String, String> sessionProperty = (Map.Entry<String, String>)sessionPropertyIter.next();
 //            	String propertyKey = (String)sessionProperty.getKey();
@@ -335,7 +337,7 @@ public class FixEngine implements Application {
             		String ssmParameterName = token.replace("<", "").replace(">", "");
                 	String ssmParamVal = getSsmParameter(ssmParameterPath, ssmParameterName);
                 	String newValue = propertyVal.replace(token,ssmParamVal);
-                	System.out.println("OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]");
+//                	System.out.println("OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]"); // commented out: logs resolved SSM values
                 	propertyVal = newValue;
                 	sessionProperty.setValue(newValue);            		
             	}
@@ -373,7 +375,7 @@ public class FixEngine implements Application {
         if ("<DebugLogging>".equals(sessionSettings.getString("DebugLogging"))) {
         	sessionSettings.setString("DebugLogging","false");
         }        
-    	LOGGER.info(MY_IP+"INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings);    	
+//    	LOGGER.info(MY_IP+"INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings); // commented out: dumps full config incl. credentials
 //        checkConfigHealthy(configfile);
         return sessionSettings;
     }
