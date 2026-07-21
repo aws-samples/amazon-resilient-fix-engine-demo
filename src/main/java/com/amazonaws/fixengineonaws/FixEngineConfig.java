@@ -55,7 +55,7 @@ public class FixEngineConfig {
 	    parameterPath = getSsmParameterPath();
 	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: GOT SSM PARAMETER PREFIX: " + parameterPath);
 	    sessionSettings = initializeParameters(configfile);
-	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: VALIDATING PARAMETERS: " + sessionSettings);
+//	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: VALIDATING PARAMETERS: " + sessionSettings); // commented out: dumps full config incl. credentials
 	    String validationErrors = validateSessionSettings();
 	    if(!"none".equals(validationErrors)) {
 		    LOGGER.severe("FIXENGINECONFIG CONSTRUCTOR: UNABLE TO START DUE TO CONFIG VALIDATION ERROR: " + validationErrors);
@@ -98,7 +98,8 @@ public class FixEngineConfig {
 	        InputStream is = new ByteArrayInputStream(oos.toByteArray());
 	        return new SessionSettings(is);
 		} catch (Exception e) {
-        	LOGGER.severe("FIXENGINECONFIG OVERRIDE PARAMETERS Unable to rewrite sessionSettings " + sessionSettings);
+//        	LOGGER.severe("FIXENGINECONFIG OVERRIDE PARAMETERS Unable to rewrite sessionSettings " + sessionSettings); // commented out: dumps full config incl. credentials
+        	LOGGER.severe("FIXENGINECONFIG OVERRIDE PARAMETERS Unable to rewrite sessionSettings: " + e);
 			e.printStackTrace();
 		}
         return null;
@@ -164,7 +165,7 @@ public class FixEngineConfig {
 
     	if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
 		    String GAEndpointArn = System.getenv(parameterName);
-		    LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]");
+//		    LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]"); // commented out: logs sensitive value
 		    if(GAEndpointArn == null) {
 		        LOGGER.severe("FIXENGINECONFIG GET SSM PARAMETER unable to find System Environment Variable (that should contain the CloudFormation stack name that created all SSM parameters) called: " + parameterName);
 		    }
@@ -183,7 +184,7 @@ public class FixEngineConfig {
             GetParameterRequest parametersRequest = new GetParameterRequest().withName(key).withWithDecryption(false);
             GetParameterResult parameterResult = SSM_CLIENT.getParameter(parametersRequest);
             String value = parameterResult.getParameter().getValue();
-            LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER got key : [" + key + "] value [" + value + "]");
+//            LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER got key : [" + key + "] value [" + value + "]"); // commented out: logs sensitive value
             return value;
         } catch (Exception e) {
             LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER unable to get key : [" + key + "] : " + e);
@@ -196,7 +197,7 @@ public class FixEngineConfig {
      * @param secretArn
      */
     public void addSqlDbConnectionCoordinatesToSettings(String secretArn) {        
-        LOGGER.info("FIXENGINECONFIG *********************GET SQL DB CONNECTION starting, using ARN: " + secretArn);
+//        LOGGER.info("FIXENGINECONFIG *********************GET SQL DB CONNECTION starting, using ARN: " + secretArn); // commented out: logs sensitive ARN
 //      AWSSecretsManager client  = System.getProperty("os.name").contains("Windows") ? AWSSecretsManagerClientBuilder.standard().withRegion(Regions.US_EAST_1).build() : AWSSecretsManagerClientBuilder.standard().build();
         AWSSecretsManager client  = AWSSecretsManagerClientBuilder.standard().build();
         GetSecretValueRequest getSecretValueRequest = new GetSecretValueRequest().withSecretId(secretArn);
@@ -205,7 +206,8 @@ public class FixEngineConfig {
         try {
             getSecretValueResult = client.getSecretValue(getSecretValueRequest);
         } catch (Exception e) {
-            LOGGER.severe("FIXENGINECONFIG ****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e);
+//            LOGGER.severe("FIXENGINECONFIG ****GET DB COORDINATES: EXCEPTION with secretArn [" + secretArn + "]: " + e); // commented out: logs sensitive ARN
+            LOGGER.severe("FIXENGINECONFIG ****GET DB COORDINATES: EXCEPTION getting secret value: " + e);
             e.printStackTrace();
         }
 
@@ -218,7 +220,8 @@ public class FixEngineConfig {
             sessionSettings.setString("JdbcPassword", parseResult.get("password").toString());
             sessionSettings.setString("JdbcURL", "jdbc:mysql://" + parseResult.get("host").toString() + ":" + parseResult.get("port").toString() + "/quickfix");            
         } catch (ParseException e) {
-            LOGGER.severe("FIXENGINECONFIG GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e);
+//            LOGGER.severe("FIXENGINECONFIG GET DB PARAMETERS: ERROR: unable to parse JSON: " + secret + " : " + e); // commented out: logs raw secret JSON
+            LOGGER.severe("FIXENGINECONFIG GET DB PARAMETERS: ERROR: unable to parse secret JSON: " + e);
             e.printStackTrace();
         }
     }
@@ -281,7 +284,7 @@ public class FixEngineConfig {
     		return null; 
     	} else {
     		String val = (String)sessionProperty.getValue();
-        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! RETURNING VALUE <" + val + ">");
+//        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! RETURNING VALUE <" + val + ">"); // commented out: logs setting value which may be sensitive
     		return val;
     	}
     }
@@ -292,13 +295,13 @@ public class FixEngineConfig {
      * @return boolean true on success, false if the setting by that name was not found 
      */
     public boolean setSessionSetting(String settingName, String newValue, SessionSettings settings) {
-    	LOGGER.fine("FIXENGINECONFIG ****SET SESSION SETTING <" + settingName + "> TO <" + newValue + ">");
+//    	LOGGER.fine("FIXENGINECONFIG ****SET SESSION SETTING <" + settingName + "> TO <" + newValue + ">"); // commented out: logs setting value which may be sensitive
     	Map.Entry<String, String> sessionProperty = findSessionSetting(settingName, true, settings);
     	if(sessionProperty == null) {
         	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> NOT FOUND");
     		return false;
     	} else {
-        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! SETTING TO <" + newValue + ">");
+//        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! SETTING TO <" + newValue + ">"); // commented out: logs setting value which may be sensitive
     		sessionProperty.setValue(newValue);
     		return true;
     	}
@@ -317,10 +320,10 @@ public class FixEngineConfig {
 	    	while (m.find()) {
 	    		String token = m.group();
 	    		String ssmParameterName = token.replace("<", "").replace(">", "");
-	    		LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] getting ready to replace [" + token + "]");
+//	    		LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] getting ready to replace [" + token + "]"); // commented out: may log resolved sensitive values
 	        	String ssmParamVal = getSsmParameter(ssmParameterName);
 	        	String newValue = propertyVal.replace(token,ssmParamVal);
-	        	LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]");
+//	        	LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]"); // commented out: logs resolved SSM values
 	        	propertyVal = newValue;
 	        	sessionProperty.setValue(newValue);            		
 	    	}
@@ -358,7 +361,7 @@ public class FixEngineConfig {
         if ("<DebugLogging>".equals(getSessionSetting("DebugLogging"))) {
         	sessionSettings.setString("DebugLogging","false");
         }        
-    	LOGGER.info("FIXENGINECONFIG INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings);    	
+//    	LOGGER.info("FIXENGINECONFIG INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings); // commented out: dumps full config incl. credentials
 //        checkConfigHealthy(configfile);
     	return sessionSettings;
     }
