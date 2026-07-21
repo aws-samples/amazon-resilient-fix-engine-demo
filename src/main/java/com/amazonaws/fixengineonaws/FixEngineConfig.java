@@ -58,7 +58,7 @@ public class FixEngineConfig {
 	    parameterPath = getSsmParameterPath();
 	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: GOT SSM PARAMETER PREFIX: " + parameterPath);
 	    sessionSettings = initializeParameters(configfile);
-	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: VALIDATING PARAMETERS: " + sessionSettings);
+	    LOGGER.info("FIXENGINECONFIG CONSTRUCTOR: VALIDATING PARAMETERS [SENSITIVE DATA REDACTED]");
 	    String validationErrors = validateSessionSettings();
 	    if(validationErrors != null) {
 		    LOGGER.severe("FIXENGINECONFIG CONSTRUCTOR: UNABLE TO START DUE TO CONFIG VALIDATION ERROR: <" + validationErrors + ">");
@@ -169,7 +169,7 @@ public class FixEngineConfig {
 
     	if("GLOBAL_ACCELERATOR_ENDPOINT_ARN".equals(parameterName)) {
 		    String GAEndpointArn = System.getenv(parameterName);
-		    LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [" + GAEndpointArn + "]");
+		    LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER PATH got GA endpoint env var  : [" + parameterName + "] value [SENSITIVE DATA REDACTED]");
 		    if(GAEndpointArn == null) {
 		        LOGGER.severe("FIXENGINECONFIG GET SSM PARAMETER unable to find System Environment Variable (that should contain the CloudFormation stack name that created all SSM parameters) called: " + parameterName);
 		    }
@@ -188,7 +188,7 @@ public class FixEngineConfig {
             GetParameterRequest parametersRequest = new GetParameterRequest().withName(key).withWithDecryption(false);
             GetParameterResult parameterResult = SSM_CLIENT.getParameter(parametersRequest);
             String value = parameterResult.getParameter().getValue();
-            LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER got key : [" + key + "] value [" + value + "]");
+            LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER got key : [" + key + "] value [SENSITIVE DATA REDACTED]");
             return value;
         } catch (Exception e) {
             LOGGER.fine("FIXENGINECONFIG GET SSM PARAMETER unable to get key : [" + key + "] : " + e);
@@ -254,7 +254,7 @@ public class FixEngineConfig {
     		return null; 
     	} else {
     		String val = (String)sessionProperty.getValue();
-        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! RETURNING VALUE <" + val + ">");
+        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! RETURNING VALUE [SENSITIVE DATA REDACTED]");
     		return val;
     	}
     }
@@ -265,13 +265,13 @@ public class FixEngineConfig {
      * @return boolean true on success, false if the setting by that name was not found 
      */
     public boolean setSessionSetting(String settingName, String newValue, SessionSettings settings) {
-    	LOGGER.fine("FIXENGINECONFIG ****SET SESSION SETTING <" + settingName + "> TO <" + newValue + ">");
+    	LOGGER.fine("FIXENGINECONFIG ****SET SESSION SETTING <" + settingName + "> TO [SENSITIVE DATA REDACTED]");
     	Map.Entry<String, String> sessionProperty = findSessionSetting(settingName, true, settings);
     	if(sessionProperty == null) {
         	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> NOT FOUND");
     		return false;
     	} else {
-        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! SETTING TO <" + newValue + ">");
+        	LOGGER.fine("FIXENGINECONFIG SET SESSION SETTING <" + settingName + "> FOUND! SETTING TO [SENSITIVE DATA REDACTED]");
     		sessionProperty.setValue(newValue);
     		return true;
     	}
@@ -290,10 +290,10 @@ public class FixEngineConfig {
 	    	while (m.find()) {
 	    		String token = m.group();
 	    		String ssmParameterName = token.replace("<", "").replace(">", "");
-	    		LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] getting ready to replace [" + token + "]");
+	    		LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS getting ready to replace token [" + token + "]");
 	        	String ssmParamVal = getSsmParameter(ssmParameterName);
 	        	String newValue = propertyVal.replace(token,ssmParamVal);
-	        	LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS in [" + propertyVal + "] replaced [" + token + "] with [" + ssmParamVal + "] to get [" + newValue + "]");
+	        	LOGGER.info("FIXENGINECONFIG OVERRIDE CONFIG FROM SSM PARAMETERS replaced token [" + token + "] with resolved value [SENSITIVE DATA REDACTED]");
 	        	propertyVal = newValue;
 	        	sessionProperty.setValue(newValue);            		
 	    	}
@@ -331,7 +331,7 @@ public class FixEngineConfig {
         if ("<DebugLogging>".equals(getSessionSetting("DebugLogging"))) {
         	sessionSettings.setString("DebugLogging","false");
         }        
-    	LOGGER.info("FIXENGINECONFIG INITIALIZE PARAMETERS finished overriding params and got: " + sessionSettings);    	
+    	LOGGER.info("FIXENGINECONFIG INITIALIZE PARAMETERS finished overriding params [SENSITIVE DATA REDACTED]");    	
 //        checkConfigHealthy(configfile);
     	return sessionSettings;
     }
