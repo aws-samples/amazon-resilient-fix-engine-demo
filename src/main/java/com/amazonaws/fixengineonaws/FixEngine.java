@@ -263,7 +263,7 @@ public class FixEngine implements Application {
      * @return
      */
     private Connection getSqlDbConnection(String jdbcUrl, String jdbcUser, String jdbcPass) {        
-        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET ");
+//        LOGGER.info(MY_IP+"*********************GET SQL DB CONNECTION starting, using JDBC URL " + jdbcUrl+ " WITH USER " + jdbcUser + " AND PASSWORD WHICH IS A SECRET "); // commented out: logs JDBC URL and username
         
         // System.out.println("CONNECTING TO URL " + jdbcUrl + " WITH USER " + jdbcUser + " AND PASS " + jdbcPass);
         try {
